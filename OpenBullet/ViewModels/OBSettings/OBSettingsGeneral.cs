@@ -26,10 +26,6 @@ namespace OpenBullet.ViewModels
         public bool DisableNotSavedWarning { get { return disableNotSavedWarning; } set { disableNotSavedWarning = value; OnPropertyChanged(); } }
         private string defaultAuthor = "";
         public string DefaultAuthor { get { return defaultAuthor; } set { defaultAuthor = value; OnPropertyChanged(); } }
-        private bool enableLogging = false;
-        public bool EnableLogging { get { return enableLogging; } set { enableLogging = value; OnPropertyChanged(); } }
-        private bool logToFile = false;
-        public bool LogToFile { get { return logToFile; } set { logToFile = value; OnPropertyChanged(); } }
         private bool liveConfigUpdates = false;
         public bool LiveConfigUpdates { get { return liveConfigUpdates; } set { liveConfigUpdates = value; OnPropertyChanged(); } }
         private bool disableHTMLView = false;
@@ -44,6 +40,18 @@ namespace OpenBullet.ViewModels
         public bool DisableSyntaxHelper { get { return disableSyntaxHelper; } set { disableSyntaxHelper = value; OnPropertyChanged(); } }
         private bool displayCapturesLast = false;
         public bool DisplayCapturesLast { get { return displayCapturesLast; } set { displayCapturesLast = value; OnPropertyChanged(); } }
+        private bool disableCopyPasteBlocks = false;
+        public bool DisableCopyPasteBlocks { get { return disableCopyPasteBlocks; } set { disableCopyPasteBlocks = value; OnPropertyChanged(); } }
+        private bool enableLogging = false;
+        public bool EnableLogging { get { return enableLogging; } set { enableLogging = value; OnPropertyChanged(); } }
+        private bool logToFile = false;
+        public bool LogToFile { get { return logToFile; } set { logToFile = value; OnPropertyChanged(); } }
+        private int logBufferSize = 10000;
+        public int LogBufferSize { get { return logBufferSize; } set { logBufferSize = value; OnPropertyChanged(); } }
+        private bool backupDB = true;
+        public bool BackupDB { get { return backupDB; } set { backupDB = value; OnPropertyChanged(); } }
+        private bool ignoreWordlistOnHitsDedupe = false;
+        public bool IgnoreWordlistOnHitDedupe { get { return ignoreWordlistOnHitsDedupe; } set { ignoreWordlistOnHitsDedupe = value; OnPropertyChanged(); } }
 
         public void Reset()
         {

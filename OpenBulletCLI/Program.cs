@@ -31,6 +31,7 @@ namespace OpenBulletCLI
 
         public static EnvironmentSettings Env { get; set; }
         public static RLSettingsViewModel RLSettings { get; set; }
+        private static Random random = new Random();
         public static RunnerViewModel Runner { get; set; }
         public static bool Verbose { get; set; } = false;
         public static string ProxyFile { get; set; }
@@ -100,10 +101,10 @@ namespace OpenBulletCLI
 
             // Read Settings file
             if (!File.Exists(settFile)) IOManager.SaveSettings(settFile, new RLSettingsViewModel());
-            RLSettings = IOManager.LoadSettings(settFile);
+            RLSettings = IOManager.LoadSettings<RLSettingsViewModel>(settFile);
 
             // Initialize the Runner (and hook event handlers)
-            Runner = new RunnerViewModel(Env, RLSettings);
+            Runner = new RunnerViewModel(Env, RLSettings, random);
             Runner.AskCustomInputs += AskCustomInputs;
             Runner.DispatchAction += DispatchAction;
             Runner.FoundHit += FoundHit;
@@ -145,7 +146,7 @@ namespace OpenBulletCLI
                 
         }
 
-        private static void MessageArrived(IRunnerMessaging obj, LogLevel level, string message, bool prompt)
+        private static void MessageArrived(IRunnerMessaging obj, LogLevel level, string message, bool prompt, int timeout)
         {
             // Do not print anything if no verbose argument was declared
             if (!Verbose) return;
@@ -173,9 +174,12 @@ namespace OpenBulletCLI
             Console.WriteLine($"[{DateTime.Now}][{hit.Type}][{hit.Proxy}] {hit.Data}", Color.GreenYellow);
 
             // If an output file was specified, print them to the output file as well
-            if (outFile != "")
+            if (outFile != string.Empty)
             {
-                File.AppendAllText(outFile, $"[{ DateTime.Now}][{hit.Type}][{hit.Proxy}] {hit.Data}{Environment.NewLine}");
+                lock (FileLocker.GetLock(outFile))
+                {
+                    File.AppendAllText(outFile, $"[{ DateTime.Now}][{hit.Type}][{hit.Proxy}] {hit.Data}{Environment.NewLine}");
+                }
             }
         }
 
@@ -201,9 +205,9 @@ namespace OpenBulletCLI
             LoadOptions(opts);
 
             // Create the hits file
-            if (opts.OutputFile != "")
+            if (opts.OutputFile != string.Empty)
             {
-                File.Create(outFile);
+                File.Create(outFile).Close();
                 Console.WriteLine($"The hits file is {outFile}", Color.Aquamarine);
             }
 
@@ -243,8 +247,8 @@ namespace OpenBulletCLI
             Runner.SetConfig(IOManager.LoadConfig(opts.ConfigFile), false);
             Runner.SetWordlist(new Wordlist(opts.WordlistFile, opts.WordlistFile, opts.WordlistType, ""));
             Runner.StartingPoint = opts.Skip;
-            if (opts.BotsNumber <= 0) Runner.BotsNumber = Runner.Config.Settings.SuggestedBots;
-            else Runner.BotsNumber = opts.BotsNumber;
+            if (opts.BotsNumber <= 0) Runner.BotsAmount = Runner.Config.Settings.SuggestedBots;
+            else Runner.BotsAmount = opts.BotsNumber;
 
             if (opts.ProxyFile != null && opts.UseProxies != null)
             {
@@ -264,7 +268,7 @@ namespace OpenBulletCLI
             Console.Title = $"OpenBulletCLI - {Runner.Master.Status} | " +
                 $"Config: {Runner.ConfigName} | " +
                 $"Wordlist {Runner.WordlistName} | " +
-                $"Bots {Runner.BotsNumber} | " +
+                $"Bots {Runner.BotsAmount} | " +
                 $"CPM: {Runner.CPM} | " +
                 $"Progress: {Runner.ProgressCount} / {Runner.WordlistSize} ({Runner.Progress}%) | " +
                 $"Hits: {Runner.HitCount} Custom: {Runner.CustomCount} ToCheck: {Runner.ToCheckCount} Fails: {Runner.FailCount} Retries: {Runner.RetryCount} | " +

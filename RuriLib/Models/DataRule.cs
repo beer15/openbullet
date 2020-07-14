@@ -23,7 +23,10 @@ namespace RuriLib.Models
         MinLength,
 
         /// <summary>The slice's length must be smaller or equal to a given number.</summary>
-        MaxLength
+        MaxLength,
+
+        /// <summary>The slice must match a given regex pattern.</summary>
+        MustMatchRegex
     }
 
     /// <summary>
@@ -31,6 +34,18 @@ namespace RuriLib.Models
     /// </summary>
     public class DataRule : ViewModelBase
     {
+        /// <summary>
+        /// List of Rule types that are displayed in the combobox.
+        /// </summary>
+        [JsonIgnore]
+        public List<RuleType> RuleTypes { get; set; } = new List<RuleType>(Enum.GetValues(typeof(RuleType)).Cast<RuleType>());
+
+        /// <summary>
+        /// List of Rule strings that are displayed in the combobox.
+        /// </summary>
+        [JsonIgnore]
+        public List<string> RuleStrings { get; set; } = new List<string>(new[] { "Lowercase", "Uppercase", "Digit", "Symbol" });
+
         private string sliceName = "";
         /// <summary>The name of the specific slice (defined in the WordlistType) this rule refers to.</summary>
         public string SliceName { get { return sliceName; } set { sliceName = value; OnPropertyChanged(); } }

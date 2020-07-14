@@ -2,6 +2,8 @@
 using OpenQA.Selenium.Chrome;
 using OpenQA.Selenium.Firefox;
 using OpenQA.Selenium.Interactions;
+using RuriLib.Functions.Files;
+using RuriLib.Functions.UserAgent;
 using RuriLib.LS;
 using RuriLib.ViewModels;
 using System;
@@ -45,6 +47,12 @@ namespace RuriLib
 
         /// <summary>Scrolls down by a given number of pixels from the top of the page.</summary>
         Scroll,
+
+        /// <summary>Opens a new tab.</summary>
+        OpenNewTab,
+
+        /// <summary>Closes the current tab.</summary>
+        CloseCurrentTab,
 
         /// <summary>Switches to the browser tab with a given index.</summary>
         SwitchToTab,
@@ -131,7 +139,7 @@ namespace RuriLib
 
             Action = (BrowserAction)LineParser.ParseEnum(ref input, "ACTION", typeof(BrowserAction));
 
-            if (input != "") Input = LineParser.ParseLiteral(ref input, "INPUT");
+            if (input != string.Empty) Input = LineParser.ParseLiteral(ref input, "INPUT");
 
             return this;
         }
@@ -160,6 +168,7 @@ namespace RuriLib
             }
 
             var replacedInput = ReplaceValues(input, data);
+            Actions keyActions = null;
 
             switch (action)
             {
@@ -183,33 +192,45 @@ namespace RuriLib
                     break;
 
                 case BrowserAction.SendKeys:
-                    var action = new Actions(data.Driver);
+                    keyActions = new Actions(data.Driver);
                     foreach(var s in replacedInput.Split(new string[] { "||" }, StringSplitOptions.None))
                     {
                         switch (s)
                         {
                             case "<TAB>":
-                                action.SendKeys(OpenQA.Selenium.Keys.Tab);
+                                keyActions.SendKeys(Keys.Tab);
                                 break;
 
                             case "<ENTER>":
-                                action.SendKeys(OpenQA.Selenium.Keys.Enter);
+                                keyActions.SendKeys(Keys.Enter);
                                 break;
 
                             case "<BACKSPACE>":
-                                action.SendKeys(OpenQA.Selenium.Keys.Backspace);
+                                keyActions.SendKeys(Keys.Backspace);
                                 break;
 
                             case "<ESC>":
-                                action.SendKeys(OpenQA.Selenium.Keys.Escape);
+                                keyActions.SendKeys(Keys.Escape);
                                 break;
 
                             default:
-                                action.SendKeys(s);
+                                // List of available keys https://github.com/SeleniumHQ/selenium/blob/master/dotnet/src/webdriver/Keys.cs
+                                var keyFields = typeof(Keys).GetFields();
+                                var matchingField = keyFields.FirstOrDefault(f =>
+                                    $"<{f.Name}>".Equals(s, StringComparison.InvariantCultureIgnoreCase));
+
+                                if (matchingField != null)
+                                {
+                                    keyActions.SendKeys(matchingField.GetValue(null).ToString());
+                                }
+                                else 
+                                {
+                                    keyActions.SendKeys(s);
+                                }
                                 break;
                         }
                     }
-                    action.Perform();
+                    keyActions.Perform();
                     Thread.Sleep(1000);
                     if(replacedInput.Contains("<ENTER>") || replacedInput.Contains("<BACKSPACE>")) // These might lead to a page change
                         UpdateSeleniumData(data);
@@ -217,12 +238,21 @@ namespace RuriLib
 
                 case BrowserAction.Screenshot:
                     var image = data.Driver.GetScreenshot();
-                    SaveScreenshot(image, data);
+                    Files.SaveScreenshot(image, data);
+                    break;
+
+                case BrowserAction.OpenNewTab:
+                    ((IJavaScriptExecutor)data.Driver).ExecuteScript("window.open();");
+                    data.Driver.SwitchTo().Window(data.Driver.WindowHandles.Last());
                     break;
 
                 case BrowserAction.SwitchToTab:
                     data.Driver.SwitchTo().Window(data.Driver.WindowHandles[int.Parse(replacedInput)]);
                     UpdateSeleniumData(data);
+                    break;
+
+                case BrowserAction.CloseCurrentTab:
+                    ((IJavaScriptExecutor)data.Driver).ExecuteScript("window.close();");
                     break;
 
                 case BrowserAction.Refresh:
@@ -269,7 +299,7 @@ namespace RuriLib
                     break;
 
                 case BrowserAction.SetCookies:
-                    var baseURL = Regex.Match(ReplaceValues(input, data), "^(?:https?:\\/\\/)?(?:[^@\\/\n]+@)?(?:www\\.)?([^:\\/?\n]+)").Groups[1].Value;
+                    var baseURL = Regex.Match(ReplaceValues(input, data), "^(?:https?:\\/\\/)?(?:[^@\\/\n]+@)?([^:\\/?\n]+)").Groups[1].Value;
                     foreach (var cookie in data.Cookies)
                     {
                         try { data.Driver.Manage().Cookies.AddCookie(new Cookie(cookie.Key, cookie.Value, baseURL, "/", DateTime.MaxValue)); } catch { }
@@ -320,9 +350,9 @@ namespace RuriLib
                                     .Where(ext => ext.EndsWith(".crx"))
                                     .Select(ext => Directory.GetCurrentDirectory() + "\\ChromeExtensions\\" + ext));
                             if (data.ConfigSettings.DisableNotifications) chromeop.AddArgument("--disable-notifications");
-                            if (data.ConfigSettings.CustomCMDArgs != "") chromeop.AddArgument(data.ConfigSettings.CustomCMDArgs);
-                            if (data.ConfigSettings.RandomUA) chromeop.AddArgument("--user-agent=" + BlockFunction.RandomUserAgent(data.rand));
-                            else if (data.ConfigSettings.CustomUserAgent != "") chromeop.AddArgument("--user-agent=" + data.ConfigSettings.CustomUserAgent);
+                            if (data.ConfigSettings.CustomCMDArgs != string.Empty) chromeop.AddArgument(data.ConfigSettings.CustomCMDArgs);
+                            if (data.ConfigSettings.RandomUA) chromeop.AddArgument("--user-agent=" + UserAgent.Random(data.random));
+                            else if (data.ConfigSettings.CustomUserAgent != string.Empty) chromeop.AddArgument("--user-agent=" + data.ConfigSettings.CustomUserAgent);
 
                             if (data.UseProxies) chromeop.AddArgument("--proxy-server=" + data.Proxy.Type.ToString().ToLower() + "://" + data.Proxy.Proxy);
 
@@ -345,9 +375,9 @@ namespace RuriLib
                             fireop.BrowserExecutableLocation = data.GlobalSettings.Selenium.FirefoxBinaryLocation;
                             if (data.GlobalSettings.Selenium.Headless || data.ConfigSettings.ForceHeadless) fireop.AddArgument("--headless");
                             if (data.ConfigSettings.DisableNotifications) fireprofile.SetPreference("dom.webnotifications.enabled", false);
-                            if (data.ConfigSettings.CustomCMDArgs != "") fireop.AddArgument(data.ConfigSettings.CustomCMDArgs);
-                            if (data.ConfigSettings.RandomUA) fireprofile.SetPreference("general.useragent.override", BlockFunction.RandomUserAgent(data.rand));
-                            else if (data.ConfigSettings.CustomUserAgent != "") fireprofile.SetPreference("general.useragent.override", data.ConfigSettings.CustomUserAgent);
+                            if (data.ConfigSettings.CustomCMDArgs != string.Empty) fireop.AddArgument(data.ConfigSettings.CustomCMDArgs);
+                            if (data.ConfigSettings.RandomUA) fireprofile.SetPreference("general.useragent.override", UserAgent.Random(data.random));
+                            else if (data.ConfigSettings.CustomUserAgent != string.Empty) fireprofile.SetPreference("general.useragent.override", data.ConfigSettings.CustomUserAgent);
 
                             if (data.UseProxies)
                             {
@@ -355,18 +385,18 @@ namespace RuriLib
                                 if (data.Proxy.Type == Extreme.Net.ProxyType.Http)
                                 {
                                     fireprofile.SetPreference("network.proxy.http", data.Proxy.Host);
-                                    fireprofile.SetPreference("network.proxy.httpport", int.Parse(data.Proxy.Port));
+                                    fireprofile.SetPreference("network.proxy.http_port", int.Parse(data.Proxy.Port));
                                     fireprofile.SetPreference("network.proxy.ssl", data.Proxy.Host);
-                                    fireprofile.SetPreference("network.proxy.sslport", int.Parse(data.Proxy.Port));
+                                    fireprofile.SetPreference("network.proxy.ssl_port", int.Parse(data.Proxy.Port));
                                 }
                                 else
                                 {
                                     fireprofile.SetPreference("network.proxy.socks", data.Proxy.Host);
-                                    fireprofile.SetPreference("network.proxy.socksport", int.Parse(data.Proxy.Port));
+                                    fireprofile.SetPreference("network.proxy.socks_port", int.Parse(data.Proxy.Port));
                                     if (data.Proxy.Type == Extreme.Net.ProxyType.Socks4)
-                                        fireprofile.SetPreference("network.proxy.socksversion", 4);
+                                        fireprofile.SetPreference("network.proxy.socks_version", 4);
                                     else if (data.Proxy.Type == Extreme.Net.ProxyType.Socks5)
-                                        fireprofile.SetPreference("network.proxy.socksversion", 5);
+                                        fireprofile.SetPreference("network.proxy.socks_version", 5);
                                 }
                             }
 

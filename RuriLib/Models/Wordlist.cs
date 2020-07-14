@@ -7,11 +7,8 @@ namespace RuriLib.Models
     /// <summary>
     /// Represents a file as a source of input data that needs to be tested against a Config by the Runner.
     /// </summary>
-    public class Wordlist
+    public class Wordlist : Persistable<Guid>
     {
-        /// <summary>Needed for NoSQL storage.</summary>
-        public Guid Id { get; set; }
-
         /// <summary>The name of the Wordlist.</summary>
         public string Name { get; set; }
 
@@ -27,6 +24,9 @@ namespace RuriLib.Models
         /// <summary>The total number of data lines of the file.</summary>
         public int Total { get; set; }
 
+        /// <summary>If true, the Wordlist does not reside on the disk.</summary>
+        public bool Temporary { get; set; }
+
         /// <summary>Needed for NoSQL deserialization.</summary>
         public Wordlist() { }
 
@@ -38,13 +38,15 @@ namespace RuriLib.Models
         /// <param name="type">The WordlistType as a string</param>
         /// <param name="purpose">The purpose of the Wordlist</param>
         /// <param name="countLines">Whether to enumerate the total number of data lines in the Wordlist</param>
-        public Wordlist(string name, string path, string type, string purpose, bool countLines = true)
+        /// <param name="temporary">If true, the Wordlist does not reside on the disk</param>
+        public Wordlist(string name, string path, string type, string purpose, bool countLines = true, bool temporary = false)
         {
             Name = name;
             Path = path;
             Type = type;
             Purpose = purpose;
             Total = 0;
+            Temporary = temporary;
             if (countLines)
             {
                 try

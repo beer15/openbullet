@@ -34,7 +34,7 @@
         </Grid.RowDefinitions>
 
         <!-- Title Bar -->
-        <Grid Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="3" Background="{DynamicResource BackgroundSecondary}">
+        <Grid x:Name="titleBar" Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="3" Background="{DynamicResource BackgroundSecondary}" MouseDown="titleBar_MouseDown">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="auto"/>
                 <ColumnDefinition Width="*"/>
@@ -88,6 +88,7 @@
                 <Label x:Name="menuOptionConfigCreator" Content="Configs" MouseDown="menuOptionConfigCreator_MouseDown" />
                 <Label x:Name="menuOptionHitsDatabase" Content="Hits DB" MouseDown="menuOptionHitsDatabase_MouseDown" />
                 <Label x:Name="menuOptionTools" Content="Tools" MouseDown="menuOptionTools_MouseDown" />
+                <Label x:Name="menuOptionPlugins" Content="Plugins" MouseDown="menuOptionPlugins_MouseDown" />
                 <Label x:Name="menuOptionSettings" Content="Settings" MouseDown="menuOptionSettings_MouseDown" />
                 <Label x:Name="menuOptionAbout" Content="About" MouseDown="menuOptionAbout_MouseDown" />
             </StackPanel>

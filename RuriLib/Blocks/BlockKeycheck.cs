@@ -1,4 +1,5 @@
-﻿using RuriLib.LS;
+﻿using RuriLib.Functions.Conditions;
+using RuriLib.LS;
 using RuriLib.Models;
 using System;
 using System.Collections.Generic;
@@ -47,7 +48,7 @@ namespace RuriLib
             while (LineParser.Lookahead(ref input) == TokenType.Boolean)
                 LineParser.SetBool(ref input, this);
 
-            while (input != "") // Scan for keychains until the end
+            while (input != string.Empty) // Scan for keychains until the end
             {
                 LineParser.EnsureIdentifier(ref input, "KEYCHAIN");
 
@@ -58,25 +59,25 @@ namespace RuriLib
                     kc.CustomType = LineParser.ParseLiteral(ref input, "Custom Type");
                 kc.Mode = (KeyChain.KeychainMode)LineParser.ParseEnum(ref input, "Keychain Mode", typeof(KeyChain.KeychainMode));
 
-                while (!input.StartsWith("KEYCHAIN") && input != "") // Scan for keys
+                while (!input.StartsWith("KEYCHAIN") && input != string.Empty) // Scan for keys
                 {
                     Key k = new Key();
                     LineParser.EnsureIdentifier(ref input, "KEY");
 
                     var first = LineParser.ParseLiteral(ref input, "Left Term");
                     // If there is another key/keychain/nothing, the user used the short syntax
-                    if (LineParser.CheckIdentifier(ref input, "KEY") || LineParser.CheckIdentifier(ref input, "KEYCHAIN") || input == "")
+                    if (LineParser.CheckIdentifier(ref input, "KEY") || LineParser.CheckIdentifier(ref input, "KEYCHAIN") || input == string.Empty)
                     {
                         k.LeftTerm = "<SOURCE>";
-                        k.Condition = Condition.Contains;
+                        k.Comparer = Comparer.Contains;
                         k.RightTerm = first;
                     }
                     // Otherwise use the long syntax
                     else
                     {
                         k.LeftTerm = first;
-                        k.Condition = (Condition)LineParser.ParseEnum(ref input, "Condition", typeof(Condition));
-                        if (k.Condition != Condition.Exists && k.Condition != Condition.DoesNotExist)
+                        k.Comparer = (Comparer)LineParser.ParseEnum(ref input, "Condition", typeof(Comparer));
+                        if (k.Comparer != Comparer.Exists && k.Comparer != Comparer.DoesNotExist)
                             k.RightTerm = LineParser.ParseLiteral(ref input, "Right Term");
                     }
 
@@ -113,7 +114,7 @@ namespace RuriLib
 
                 foreach(var k in kc.Keys)
                 {
-                    if (k.LeftTerm == "<SOURCE>" && k.Condition == Condition.Contains)
+                    if (k.LeftTerm == "<SOURCE>" && k.Comparer == Comparer.Contains)
                     {
                         writer
                             .Indent(2)
@@ -126,9 +127,9 @@ namespace RuriLib
                         .Indent(2)
                         .Token("KEY")
                         .Literal(k.LeftTerm)
-                        .Token(k.Condition);
+                        .Token(k.Comparer);
 
-                        if (k.Condition != Condition.Exists && k.Condition != Condition.DoesNotExist)
+                        if (k.Comparer != Comparer.Exists && k.Comparer != Comparer.DoesNotExist)
                             writer.Literal(k.RightTerm);
                     }
                 }
@@ -151,7 +152,7 @@ namespace RuriLib
             // Check Global Keys
             foreach (var key in data.GlobalSettings.Proxies.GlobalBanKeys)
             {
-                if (key != "" && data.ResponseSource.Contains(key))
+                if (key != string.Empty && data.ResponseSource.Contains(key))
                 {
                     data.Status = BotStatus.BAN;
                     return;

@@ -1,11 +1,14 @@
-﻿using Extreme.Net;
+﻿using RuriLib.Functions.Crypto;
+using RuriLib.Functions.Formats;
+using RuriLib.Functions.Time;
+using RuriLib.Functions.UserAgent;
 using RuriLib.LS;
 using System;
 using System.Collections.Generic;
 using System.Data;
 using System.Globalization;
-using System.IO;
 using System.Linq;
+using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -65,6 +68,15 @@ namespace RuriLib
 
             /// <summary>Decodes a URL-encoded input.</summary>
             URLDecode,
+            
+            /// <summary>Unescapes characters in a string.</summary>
+            Unescape,      
+
+            /// <summary>Encodes the input to be displayed in HTML or XML.</summary>
+            HTMLEntityEncode,
+
+            /// <summary>Decoded an input containing HTML or XML entities.</summary>
+            HTMLEntityDecode,
 
             /// <summary>Converts a unix timestamp to a formatted date.</summary>
             UnixTimeToDate,
@@ -99,8 +111,14 @@ namespace RuriLib
             /// <summary>Clears the cookie jar used for HTTP requests.</summary>
             ClearCookies,
 
-            /// <summary>Encrypts a string with RSA given a Key.</summary>
-            RSA,
+            /// <summary>Encrypts a string with RSA.</summary>
+            RSAEncrypt,
+
+            // <summary>Decrypts a string with RSA.</summary>
+            // RSADecrypt,
+
+            /// <summary>Encrypts a string with RSA PKCS1PAD2.</summary>
+            RSAPKCS1PAD2,
 
             /// <summary>Waits a given amount of milliseconds.</summary>
             Delay,
@@ -124,28 +142,10 @@ namespace RuriLib
             AESEncrypt,
 
             /// <summary>Decrypts an AES-encrypted string.</summary>
-            AESDecrypt
-        }
+            AESDecrypt,
 
-        /// <summary>
-        /// The available hashing functions.
-        /// </summary>
-        public enum Hash
-        {
-            /// <summary>The MD5 hashing function (128 bits digest).</summary>
-            MD5,
-
-            /// <summary>The SHA-1 hashing function (160 bits digest).</summary>
-            SHA1,
-
-            /// <summary>The SHA-256 hashing function (256 bits digest).</summary>
-            SHA256,
-
-            /// <summary>The SHA-384 hashing function (384 bits digest).</summary>
-            SHA384,
-
-            /// <summary>The SHA-512 hashing function (512 bits digest).</summary>
-            SHA512,
+            /// <summary>Generates a key using a password based KDF.</summary>
+            PBKDF2PKCS5
         }
 
         #region General Properties
@@ -172,6 +172,10 @@ namespace RuriLib
         /// <summary>The hashing function to use.</summary>
         public Hash HashType { get { return hashType; } set { hashType = value; OnPropertyChanged(); } }
 
+        private bool inputBase64 = false;
+        /// <summary>Whether the input is a base64-encoded string instead of UTF8.</summary>
+        public bool InputBase64 { get { return inputBase64; } set { inputBase64 = value; OnPropertyChanged(); } }
+
         // -- Hmac
         private string hmacKey = "";
         /// <summary>The key used to authenticate the message.</summary>
@@ -180,6 +184,10 @@ namespace RuriLib
         private bool hmacBase64 = false;
         /// <summary>Whether to output the message as a base64-encoded string instead of a hex-encoded string.</summary>
         public bool HmacBase64 { get { return hmacBase64; } set { hmacBase64 = value; OnPropertyChanged(); } }
+
+        private bool keyBase64 = false;
+        /// <summary>Whether the HMAC Key is a base64-encoded string instead of UTF8.</summary>
+        public bool KeyBase64 { get { return keyBase64; } set { keyBase64 = value; OnPropertyChanged(); } }
 
         // -- Translate
         private bool stopAfterFirstMatch = true;
@@ -213,13 +221,17 @@ namespace RuriLib
         public string RegexMatch { get { return regexMatch; } set { regexMatch = value; OnPropertyChanged(); } }
 
         // -- Random Number
-        private int randomMin = 0;
-        /// <summary>The minimum random number that can be generated.</summary>
-        public int RandomMin { get { return randomMin; } set { randomMin = value; OnPropertyChanged(); } }
+        private string randomMin = "0";
+        /// <summary>The minimum random number that can be generated (inclusive).</summary>
+        public string RandomMin { get { return randomMin; } set { randomMin = value; OnPropertyChanged(); } }
 
-        private int randomMax = 0;
-        /// <summary>The maximum random number that can be generated.</summary>
-        public int RandomMax { get { return randomMax; } set { randomMax = value; OnPropertyChanged(); } }
+        private string randomMax = "0";
+        /// <summary>The maximum random number that can be generated (exclusive).</summary>
+        public string RandomMax { get { return randomMax; } set { randomMax = value; OnPropertyChanged(); } }
+
+        private bool randomZeroPad = false;
+        /// <summary>Whether to pad with zeros on the left to match the length of the maximum provided.</summary>
+        public bool RandomZeroPad { get { return randomZeroPad; } set { randomZeroPad = value; OnPropertyChanged(); } }
 
         // -- CountOccurrences
         private string stringToFind = "";
@@ -227,13 +239,21 @@ namespace RuriLib
         public string StringToFind { get { return stringToFind; } set { stringToFind = value; OnPropertyChanged(); } }
 
         // -- RSA
-        private string rsaMod = "";
-        /// <summary>The modulus of the RSA key.</summary>
-        public string RSAMod { get { return rsaMod; } set { rsaMod = value; OnPropertyChanged(); } }
+        private string rsaN = "";
+        /// <summary>The modulus of the RSA public key as a base64 string.</summary>
+        public string RsaN { get { return rsaN; } set { rsaN = value; OnPropertyChanged(); } }
 
-        private string rsaExp = "";
-        /// <summary>The exponent of the RSA key.</summary>
-        public string RSAExp { get { return rsaExp; } set { rsaExp = value; OnPropertyChanged(); } }
+        private string rsaE = "";
+        /// <summary>The exponent of the RSA public key as a base64 string.</summary>
+        public string RsaE { get { return rsaE; } set { rsaE = value; OnPropertyChanged(); } }
+
+        private string rsaD = "";
+        /// <summary>The exponent of the RSA private key as a base64 string.</summary>
+        public string RsaD { get { return rsaD; } set { rsaD = value; OnPropertyChanged(); } }
+
+        private bool rsaOAEP = true;
+        /// <summary>Whether to use OAEP padding instead of PKCS v1.5.</summary>
+        public bool RsaOAEP { get { return rsaOAEP; } set { rsaOAEP = value; OnPropertyChanged(); } }
 
         // --- CharAt
         private string charIndex = "0";
@@ -249,10 +269,66 @@ namespace RuriLib
         /// <summary>The length of the wanted substring.</summary>
         public string SubstringLength { get { return substringLength; } set { substringLength = value; OnPropertyChanged(); } }
 
+        // -- User Agent
+        private bool userAgentSpecifyBrowser = false;
+        /// <summary>Whether to only limit the UA generation to a certain browser.</summary>
+        public bool UserAgentSpecifyBrowser { get { return userAgentSpecifyBrowser; } set { userAgentSpecifyBrowser = value; OnPropertyChanged(); } }
+
+        private UserAgent.Browser userAgentBrowser = UserAgent.Browser.Chrome;
+        /// <summary>The browser for which the User Agent should be generated.</summary>
+        public UserAgent.Browser UserAgentBrowser { get { return userAgentBrowser; } set { userAgentBrowser = value; OnPropertyChanged(); } }
+
         // -- AES
         private string aesKey = "";
-        /// <summary>The keys used for AES encryption and decryption.</summary>
+        /// <summary>The keys used for AES encryption and decryption as a base64 string.</summary>
         public string AesKey { get { return aesKey; } set { aesKey = value; OnPropertyChanged(); } }
+
+        private string aesIV = "";
+        /// <summary>The initial value as a base64 string.</summary>
+        public string AesIV { get { return aesIV; } set { aesIV = value; OnPropertyChanged(); } }
+
+        private CipherMode aesMode = CipherMode.CBC;
+        /// <summary>The cipher mode.</summary>
+        public CipherMode AesMode { get { return aesMode; } set { aesMode = value; OnPropertyChanged(); } }
+
+        private PaddingMode aesPadding = PaddingMode.None;
+        /// <summary>The padding mode.</summary>
+        public PaddingMode AesPadding { get { return aesPadding; } set { aesPadding = value; OnPropertyChanged(); } }
+
+        // -- PBKDF2PKCS5
+        private string kdfSalt = "";
+        /// <summary>The KDF's salt as a base64 string.</summary>
+        public string KdfSalt { get { return kdfSalt; } set { kdfSalt = value; OnPropertyChanged(); } }
+
+        private int kdfSaltSize = 8;
+        /// <summary>The size of the generated salt (in bytes) in case none is specified.</summary>
+        public int KdfSaltSize { get { return kdfSaltSize; } set { kdfSaltSize = value; OnPropertyChanged(); } }
+
+        private int kdfIterations = 1;
+        /// <summary>The number of times to perform the algorithm.</summary>
+        public int KdfIterations { get { return kdfIterations; } set { kdfIterations = value; OnPropertyChanged(); } }
+
+        private int kdfKeySize = 16;
+        /// <summary>The size of the generated key (in bytes).</summary>
+        public int KdfKeySize { get { return kdfKeySize; } set { kdfKeySize = value; OnPropertyChanged(); } }
+
+        private Hash kdfAlgorithm = Hash.SHA1;
+        /// <summary>The size of the generated salt (in bytes) in case none is specified.</summary>
+        public Hash KdfAlgorithm { get { return kdfAlgorithm; } set { kdfAlgorithm = value; OnPropertyChanged(); } }
+        #endregion
+
+        #region RandomString Properties
+        private static readonly string _lowercase = "abcdefghijklmnopqrstuvwxyz";
+        private static readonly string _uppercase = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+        private static readonly string _digits = "0123456789";
+        private static readonly string _symbols = "\\!\"£$%&/()=?^'{}[]@#,;.:-_*+";
+        private static readonly string _hex = _digits + "abcdef";
+        private static readonly string _udChars = _uppercase + _digits;
+        private static readonly string _ldChars = _lowercase + _digits;
+        private static readonly string _upperlwr = _lowercase + _uppercase;
+        private static readonly string _ludChars = _lowercase + _uppercase + _digits;
+        private static readonly string _allChars = _lowercase + _uppercase + _digits + _symbols;
+        
         #endregion
 
         /// <summary>
@@ -286,6 +362,8 @@ namespace RuriLib
             {
                 case Function.Hash:
                     HashType = LineParser.ParseEnum(ref input, "Hash Type", typeof(Hash));
+                    while (LineParser.Lookahead(ref input) == TokenType.Boolean)
+                        LineParser.SetBool(ref input, this);
                     break;
 
                 case Function.HMAC:
@@ -299,7 +377,7 @@ namespace RuriLib
                     if (LineParser.Lookahead(ref input) == TokenType.Boolean)
                         LineParser.SetBool(ref input, this);
                     TranslationDictionary = new Dictionary<string, string>();
-                    while (input != "" && LineParser.Lookahead(ref input) == TokenType.Parameter)
+                    while (input != string.Empty && LineParser.Lookahead(ref input) == TokenType.Parameter)
                     {
                         LineParser.EnsureIdentifier(ref input, "KEY");
                         var k = LineParser.ParseLiteral(ref input, "Key");
@@ -311,6 +389,16 @@ namespace RuriLib
 
                 case Function.DateToUnixTime:
                     DateFormat = LineParser.ParseLiteral(ref input, "DATE FORMAT");
+                    break;
+
+                case Function.UnixTimeToDate:
+                    DateFormat = LineParser.ParseLiteral(ref input, "DATE FORMAT");
+                    // a little backward compatability with the old line format.
+                    if (LineParser.Lookahead(ref input) != TokenType.Literal)
+                    {
+                        InputString = DateFormat;
+                        DateFormat = "yyyy-MM-dd:HH-mm-ss";
+                    }
                     break;
 
                 case Function.Replace:
@@ -325,8 +413,20 @@ namespace RuriLib
                     break;
 
                 case Function.RandomNum:
-                    RandomMin = LineParser.ParseInt(ref input, "Minimum");
-                    RandomMax = LineParser.ParseInt(ref input, "Maximum");
+                    if (LineParser.Lookahead(ref input) == TokenType.Literal)
+                    {
+                        RandomMin = LineParser.ParseLiteral(ref input, "Minimum");
+                        RandomMax = LineParser.ParseLiteral(ref input, "Maximum");
+                    }
+                    // Support for old integer definition of Min and Max
+                    else
+                    {
+                        RandomMin = LineParser.ParseInt(ref input, "Minimum").ToString();
+                        RandomMax = LineParser.ParseInt(ref input, "Maximum").ToString();
+                    }
+                    
+                    if (LineParser.Lookahead(ref input) == TokenType.Boolean)
+                        LineParser.SetBool(ref input, this);
                     break;
 
                 case Function.CountOccurrences:
@@ -342,9 +442,50 @@ namespace RuriLib
                     SubstringLength = LineParser.ParseLiteral(ref input, "Length");
                     break;
 
-                case Function.RSA:
-                    RSAMod = LineParser.ParseLiteral(ref input, "Modulus");
-                    RSAExp = LineParser.ParseLiteral(ref input, "Exponent");
+                case Function.RSAEncrypt:
+                    RsaN = LineParser.ParseLiteral(ref input, "Public Key Modulus");
+                    RsaE = LineParser.ParseLiteral(ref input, "Public Key Exponent");
+                    if (LineParser.Lookahead(ref input) == TokenType.Boolean)
+                        LineParser.SetBool(ref input, this);
+                    break;
+
+                /*
+            case Function.RSADecrypt:
+                RsaN = LineParser.ParseLiteral(ref input, "Public Key Modulus");
+                RsaD = LineParser.ParseLiteral(ref input, "Private Key Exponent");
+                if (LineParser.Lookahead(ref input) == TokenType.Boolean)
+                    LineParser.SetBool(ref input, this);
+                break;
+                */
+
+                case Function.RSAPKCS1PAD2:
+                    RsaN = LineParser.ParseLiteral(ref input, "Public Key Modulus");
+                    RsaE = LineParser.ParseLiteral(ref input, "Public Key Exponent");
+                    break;
+
+                case Function.GetRandomUA:
+                    if (LineParser.ParseToken(ref input, TokenType.Parameter, false, false) == "BROWSER")
+                    {
+                        LineParser.EnsureIdentifier(ref input, "BROWSER");
+                        UserAgentSpecifyBrowser = true;
+                        UserAgentBrowser = LineParser.ParseEnum(ref input, "BROWSER", typeof(UserAgent.Browser));
+                    };
+                    break;
+
+                case Function.AESDecrypt:
+                case Function.AESEncrypt:
+                    AesKey = LineParser.ParseLiteral(ref input, "Key");
+                    AesIV = LineParser.ParseLiteral(ref input, "IV");
+                    AesMode = LineParser.ParseEnum(ref input, "Cipher mode", typeof(CipherMode));
+                    AesPadding = LineParser.ParseEnum(ref input, "Padding mode", typeof(PaddingMode));
+                    break;
+
+                case Function.PBKDF2PKCS5:
+                    if (LineParser.Lookahead(ref input) == TokenType.Literal) KdfSalt = LineParser.ParseLiteral(ref input, "Salt");
+                    else KdfSaltSize = LineParser.ParseInt(ref input, "Salt size");
+                    KdfIterations = LineParser.ParseInt(ref input, "Iterations");
+                    KdfKeySize = LineParser.ParseInt(ref input, "Key size");
+                    KdfAlgorithm = LineParser.ParseEnum(ref input, "Algorithm", typeof(Hash));
                     break;
 
                 default:
@@ -356,7 +497,7 @@ namespace RuriLib
                 InputString = LineParser.ParseLiteral(ref input, "INPUT");
 
             // Try to parse the arrow, otherwise just return the block as is with default var name and var / cap choice
-            if (LineParser.ParseToken(ref input, TokenType.Arrow, false) == "")
+            if (LineParser.ParseToken(ref input, TokenType.Arrow, false) == string.Empty)
                 return this;
 
             // Parse the VAR / CAP
@@ -388,19 +529,22 @@ namespace RuriLib
             {
                 case Function.Hash:
                     writer
-                        .Token(HashType);
+                        .Token(HashType)
+                        .Boolean(InputBase64, nameof(InputBase64));
                     break;
 
                 case Function.HMAC:
                     writer
                         .Token(HashType)
                         .Literal(HmacKey)
-                        .Boolean(HmacBase64, "HmacBase64");
+                        .Boolean(InputBase64, nameof(InputBase64))
+                        .Boolean(HmacBase64, nameof(HmacBase64))
+                        .Boolean(KeyBase64, nameof(KeyBase64));
                     break;
 
                 case Function.Translate:
                     writer
-                        .Boolean(StopAfterFirstMatch, "StopAfterFirstMatch");
+                        .Boolean(StopAfterFirstMatch, nameof(StopAfterFirstMatch));
                     foreach (var t in TranslationDictionary)
                         writer
                             .Indent()
@@ -413,27 +557,29 @@ namespace RuriLib
                         .Indent();
                     break;
 
+                case Function.UnixTimeToDate:
                 case Function.DateToUnixTime:
                     writer
-                        .Literal(DateFormat, "DateFormat");
+                        .Literal(DateFormat);
                     break;
 
                 case Function.Replace:
                     writer
                         .Literal(ReplaceWhat)
                         .Literal(ReplaceWith)
-                        .Boolean(UseRegex, "UseRegex");
+                        .Boolean(UseRegex, nameof(UseRegex));
                     break;
 
                 case Function.RegexMatch:
                     writer
-                        .Literal(RegexMatch, "RegexMatch");
+                        .Literal(RegexMatch, nameof(RegexMatch));
                     break;
 
                 case Function.RandomNum:
                     writer
-                        .Integer(RandomMin)
-                        .Integer(RandomMax);
+                        .Literal(RandomMin)
+                        .Literal(RandomMax)
+                        .Boolean(RandomZeroPad, nameof(RandomZeroPad));
                     break;
 
                 case Function.CountOccurrences:
@@ -452,11 +598,55 @@ namespace RuriLib
                         .Literal(SubstringLength);
                     break;
 
-                case Function.RSA:
+                case Function.RSAEncrypt:
                     writer
-                        .Literal(RSAMod)
-                        .Literal(RSAExp);
+                        .Literal(RsaN)
+                        .Literal(RsaE)
+                        .Boolean(RsaOAEP, nameof(RsaOAEP));
                     break;
+
+                    /*
+                case Function.RSADecrypt:
+                    writer
+                        .Literal(RsaN)
+                        .Literal(RsaD)
+                        .Boolean(RsaOAEP, "RsaOAEP");
+                    break;
+                    */
+
+                case Function.RSAPKCS1PAD2:
+                    writer
+                        .Literal(RsaN)
+                        .Literal(RsaE);
+                    break;
+
+                case Function.GetRandomUA:
+                    if (UserAgentSpecifyBrowser)
+                    {
+                        writer
+                            .Token("BROWSER")
+                            .Token(UserAgentBrowser);
+                    }
+                    break;
+
+                case Function.AESDecrypt:
+                case Function.AESEncrypt:
+                    writer
+                        .Literal(AesKey)
+                        .Literal(AesIV)
+                        .Token(AesMode)
+                        .Token(AesPadding);
+                    break;
+
+                case Function.PBKDF2PKCS5:
+                    if (KdfSalt != string.Empty) writer.Literal(KdfSalt);
+                    else writer.Integer(KdfSaltSize);
+                    writer
+                        .Integer(KdfIterations)
+                        .Integer(KdfKeySize)
+                        .Token(KdfAlgorithm);
+                    break;
+                        
             }
 
             writer
@@ -470,18 +660,18 @@ namespace RuriLib
             return writer.ToString();
         }
 
+        private static readonly NumberStyles _style = NumberStyles.Number | NumberStyles.AllowCurrencySymbol;
+        private static readonly IFormatProvider _provider = new CultureInfo("en-US");
+
         /// <inheritdoc />
         public override void Process(BotData data)
         {
             base.Process(data);
 
-            var style = NumberStyles.Number | NumberStyles.AllowCurrencySymbol;
-            var provider = new CultureInfo("en-US");
-
             var localInputStrings = ReplaceValuesRecursive(inputString, data);
             var outputs = new List<string>();
 
-            for(int i = 0; i < localInputStrings.Count; i++)
+            for (int i = 0; i < localInputStrings.Count; i++)
             {
                 var localInputString = localInputStrings[i];
                 var outputString = "";
@@ -493,19 +683,27 @@ namespace RuriLib
                         break;
 
                     case Function.Base64Encode:
-                        outputString = Base64Encode(localInputString);
+                        outputString = localInputString.ToBase64();
                         break;
 
                     case Function.Base64Decode:
-                        outputString = Base64Decode(localInputString);
+                        outputString = localInputString.FromBase64();
+                        break;
+
+                    case Function.HTMLEntityEncode:
+                        outputString = WebUtility.HtmlEncode(localInputString);
+                        break;
+
+                    case Function.HTMLEntityDecode:
+                        outputString = WebUtility.HtmlDecode(localInputString);
                         break;
 
                     case Function.Hash:
-                        outputString = GetHash(localInputString, hashType).ToLower();
+                        outputString = GetHash(localInputString, hashType, InputBase64).ToLower();
                         break;
 
                     case Function.HMAC:
-                        outputString = Hmac(localInputString, hashType, ReplaceValues(hmacKey, data), hmacBase64);
+                        outputString = Hmac(localInputString, hashType, ReplaceValues(hmacKey, data), InputBase64, KeyBase64, HmacBase64);
                         break;
 
                     case Function.Translate:
@@ -521,10 +719,7 @@ namespace RuriLib
                         break;
 
                     case Function.DateToUnixTime:
-                        outputString = (DateTime.ParseExact(localInputString, dateFormat, new CultureInfo("en-US"), DateTimeStyles.AllowWhiteSpaces)
-                            .Subtract(new DateTime(1970, 1, 1)))
-                            .TotalSeconds
-                            .ToString();
+                        outputString = localInputString.ToDateTime(dateFormat).ToUnixTimeSeconds().ToString();
                         break;
 
                     case Function.Length:
@@ -550,79 +745,62 @@ namespace RuriLib
                         outputString = Regex.Match(localInputString, ReplaceValues(regexMatch, data)).Value;
                         break;
 
+                    case Function.Unescape:
+                        outputString = Regex.Unescape(localInputString);
+                        break;
+
                     case Function.URLEncode:
-                        outputString = System.Uri.EscapeDataString(localInputString);
+                        // The maximum allowed Uri size is 2083 characters, we use 2080 as a precaution
+                        outputString = string.Join("", SplitInChunks(localInputString, 2080).Select(s => Uri.EscapeDataString(s)));
                         break;
 
                     case Function.URLDecode:
-                        outputString = System.Uri.UnescapeDataString(localInputString);
+                        outputString = Uri.UnescapeDataString(localInputString);
                         break;
 
                     case Function.UnixTimeToDate:
-                        try
-                        {
-                            var loc = localInputString;
-                            if (localInputString.Length > 10) loc = localInputString.Substring(0, 10);
-                            DateTime dtDateTime = new DateTime(1970, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc);
-                            dtDateTime = dtDateTime.AddSeconds(int.Parse(loc)).ToLocalTime();
-                            outputString = dtDateTime.ToShortDateString();
-                        }
-                        catch { }
-
+                        outputString = double.Parse(localInputString).ToDateTime().ToString(dateFormat);
                         break;
 
                     case Function.CurrentUnixTime:
-                        outputString = Math.Round((DateTime.UtcNow.Subtract(new DateTime(1970, 1, 1))).TotalSeconds).ToString();
+                        outputString = DateTime.UtcNow.ToUnixTimeSeconds().ToString();
                         break;
 
                     case Function.UnixTimeToISO8601:
-                        var loc2 = localInputString;
-                        if (localInputString.Length > 10) loc2 = localInputString.Substring(0, 10);
-                        DateTime dateTime = new DateTime(1970, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc);
-                        dateTime = dateTime.AddSeconds(int.Parse(loc2)).ToLocalTime();
-                        outputString = dateTime.ToString("yyyy-MM-ddTHH\\:mm\\:ss.fffZ");
+                        outputString = double.Parse(localInputString).ToDateTime().ToISO8601();
                         break;
 
                     case Function.RandomNum:
-                        outputString = (data.rand.Next(randomMin, randomMax)).ToString();
+                        var min = int.Parse(ReplaceValues(randomMin, data));
+                        var max = int.Parse(ReplaceValues(randomMax, data));
+                        var randomNumString = data.random.Next(min, max).ToString();
+                        outputString = randomZeroPad ? randomNumString.PadLeft(max.ToString().Length, '0') : randomNumString;
                         break;
 
                     case Function.RandomString:
-                        var reserved = new string[] { "?l", "?u", "?d", "?s", "?h", "?a" };
-                        var lowercase = "abcdefghijklmnopqrstuvwxyz";
-                        var uppercase = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-                        var digits = "0123456789";
-                        var symbols = "\\!\"£$%&/()=?^'{}[]@#,;.:-_*+";
-                        var hex = digits + "abcdef";
-                        var allchars = lowercase + uppercase + digits + symbols;
-
                         outputString = localInputString;
-                        while (reserved.Any(r => outputString.Contains(r))){
-                            if (outputString.Contains("?l"))
-                                outputString = ReplaceFirst(outputString, "?l", lowercase[data.rand.Next(0, lowercase.Length)].ToString());
-                            else if (outputString.Contains("?u"))
-                                outputString = ReplaceFirst(outputString, "?u", uppercase[data.rand.Next(0, uppercase.Length)].ToString());
-                            else if (outputString.Contains("?d"))
-                                outputString = ReplaceFirst(outputString, "?d", digits[data.rand.Next(0, digits.Length)].ToString());
-                            else if (outputString.Contains("?s"))
-                                outputString = ReplaceFirst(outputString, "?s", symbols[data.rand.Next(0, symbols.Length)].ToString());
-                            else if (outputString.Contains("?h"))
-                                outputString = ReplaceFirst(outputString, "?h", hex[data.rand.Next(0, hex.Length)].ToString());
-                            else if (outputString.Contains("?a"))
-                                outputString = ReplaceFirst(outputString, "?a", allchars[data.rand.Next(0, allchars.Length)].ToString());
-                        }
+                        outputString = Regex.Replace(outputString, @"\?l", m => _lowercase[data.random.Next(_lowercase.Length)].ToString());
+                        outputString = Regex.Replace(outputString, @"\?u", m => _uppercase[data.random.Next(_uppercase.Length)].ToString());
+                        outputString = Regex.Replace(outputString, @"\?d", m => _digits[data.random.Next(_digits.Length)].ToString());
+                        outputString = Regex.Replace(outputString, @"\?s", m => _symbols[data.random.Next(_symbols.Length)].ToString());
+                        outputString = Regex.Replace(outputString, @"\?h", m => _hex[data.random.Next(_hex.Length)].ToString());
+                        outputString = Regex.Replace(outputString, @"\?a", m => _allChars[data.random.Next(_allChars.Length)].ToString());
+                        outputString = Regex.Replace(outputString, @"\?m", m => _udChars[data.random.Next(_udChars.Length)].ToString());
+                        outputString = Regex.Replace(outputString, @"\?n", m => _ldChars[data.random.Next(_ldChars.Length)].ToString());
+                        outputString = Regex.Replace(outputString, @"\?i", m => _ludChars[data.random.Next(_ludChars.Length)].ToString());
+                        outputString = Regex.Replace(outputString, @"\?f", m => _upperlwr[data.random.Next(_upperlwr.Length)].ToString());
                         break;
 
                     case Function.Ceil:
-                        outputString = Math.Ceiling(Decimal.Parse(localInputString, style, provider)).ToString();
+                        outputString = Math.Ceiling(Decimal.Parse(localInputString, _style, _provider)).ToString();
                         break;
 
                     case Function.Floor:
-                        outputString = Math.Floor(Decimal.Parse(localInputString, style, provider)).ToString();
+                        outputString = Math.Floor(Decimal.Parse(localInputString, _style, _provider)).ToString();
                         break;
 
                     case Function.Round:
-                        outputString = Math.Round(Decimal.Parse(localInputString, style, provider), 0, MidpointRounding.AwayFromZero).ToString();
+                        outputString = Math.Round(Decimal.Parse(localInputString, _style, _provider), 0, MidpointRounding.AwayFromZero).ToString();
                         break;
 
                     case Function.Compute:
@@ -637,15 +815,32 @@ namespace RuriLib
                         data.Cookies.Clear();
                         break;
 
-                    case Function.RSA:
-                        try
-                        {
-                            while (outputString.Length < 2 || outputString.Substring(outputString.Length - 2) != "==")
-                            {
-                                outputString = SteamRSAEncrypt(new RsaParameters { Exponent = ReplaceValues(RSAExp, data), Modulus = ReplaceValues(RSAMod, data), Password = localInputString });
-                            }
-                        }
-                        catch (Exception ex) { outputString = ex.ToString(); }
+                    case Function.RSAEncrypt:
+                        outputString = Crypto.RSAEncrypt(
+                            localInputString,
+                            ReplaceValues(RsaN, data),
+                            ReplaceValues(RsaE, data),
+                            RsaOAEP
+                            );
+                        break;
+
+                        /*
+                    case Function.RSADecrypt:
+                        outputString = Crypto.RSADecrypt(
+                            localInputString,
+                            ReplaceValues(RsaN, data),
+                            ReplaceValues(RsaD, data),
+                            RsaOAEP
+                            );
+                        break;
+                        */
+
+                    case Function.RSAPKCS1PAD2:
+                        outputString = Crypto.RSAPkcs1Pad2(
+                            localInputString,
+                            ReplaceValues(RsaN, data),
+                            ReplaceValues(RsaE, data)
+                            );
                         break;
 
                     case Function.Delay:
@@ -657,7 +852,7 @@ namespace RuriLib
                         break;
 
                     case Function.Substring:
-                        outputString = localInputString.Substring(int.Parse(ReplaceValues(substringIndex, data)), int.Parse(ReplaceValues(substringLength,data)));
+                        outputString = localInputString.Substring(int.Parse(ReplaceValues(substringIndex, data)), int.Parse(ReplaceValues(substringLength, data)));
                         break;
 
                     case Function.ReverseString:
@@ -671,18 +866,29 @@ namespace RuriLib
                         break;
 
                     case Function.GetRandomUA:
-                        outputString = RandomUserAgent(data.rand);
+                        if (UserAgentSpecifyBrowser)
+                        {
+                            outputString = UserAgent.ForBrowser(UserAgentBrowser);
+                        }
+                        else
+                        {
+                            outputString = UserAgent.Random(data.random);
+                        }
                         break;
 
                     case Function.AESEncrypt:
-                        outputString = AESEncrypt(ReplaceValues(aesKey, data), localInputString);
+                        outputString = Crypto.AESEncrypt(localInputString, ReplaceValues(aesKey, data), ReplaceValues(aesIV, data), AesMode, AesPadding);
                         break;
 
                     case Function.AESDecrypt:
-                        outputString = AESDecrypt(ReplaceValues(aesKey, data), localInputString);
+                        outputString = Crypto.AESDecrypt(localInputString, ReplaceValues(aesKey, data), ReplaceValues(aesIV, data), AesMode, AesPadding);
+                        break;
+
+                    case Function.PBKDF2PKCS5:
+                        outputString = Crypto.PBKDF2PKCS5(localInputString, ReplaceValues(KdfSalt, data), KdfSaltSize, KdfIterations, KdfKeySize, KdfAlgorithm);
                         break;
                 }
-                
+
                 data.Log(new LogEntry(string.Format("Executed function {0} on input {1} with outcome {2}", functionType, localInputString, outputString), Colors.GreenYellow));
 
                 // Add to the outputs
@@ -690,62 +896,52 @@ namespace RuriLib
             }
 
             var isList = outputs.Count > 1 || InputString.Contains("[*]") || InputString.Contains("(*)") || InputString.Contains("{*}");
-            InsertVariables(data, isCapture, isList, outputs, variableName, "", "");
+            InsertVariable(data, isCapture, isList, outputs, variableName, "", "", false, true);
         }
 
-        #region Base64
-        /// <summary>
-        /// Encodes a string to base64.
-        /// </summary>
-        /// <param name="plainText">The string to encode</param>
-        /// <returns>The base64-encoded string</returns>
-        public static string Base64Encode(string plainText)
-        {
-            var plainTextBytes = System.Text.Encoding.UTF8.GetBytes(plainText);
-            return System.Convert.ToBase64String(plainTextBytes);
-        }
-
-        /// <summary>
-        /// Decodes a base64-encoded string.
-        /// </summary>
-        /// <param name="base64EncodedData">The base64-encoded string</param>
-        /// <returns>The decoded string</returns>
-        public static string Base64Decode(string base64EncodedData)
-        {
-            var base64EncodedBytes = System.Convert.FromBase64String(base64EncodedData);
-            return System.Text.Encoding.UTF8.GetString(base64EncodedBytes);
-        }
-        #endregion
-
-        #region Hash and Hmac
         /// <summary>
         /// Hashes a string using the specified hashing function.
         /// </summary>
         /// <param name="baseString">The string to hash</param>
         /// <param name="type">The hashing function</param>
-        /// <returns>The hash digest as a hex-encoded string</returns>
-        public static string GetHash(string baseString, Hash type)
+        /// <param name="inputBase64">Whether the base string should be treated as base64 encoded (if false, it will be treated as UTF8 encoded)</param>
+        /// <returns>The hash digest as a hex-encoded uppercase string.</returns>
+        public static string GetHash(string baseString, Hash type, bool inputBase64)
         {
+            var rawInput = inputBase64 ? Convert.FromBase64String(baseString) : Encoding.UTF8.GetBytes(baseString);
+            byte[] digest;
+            
             switch (type)
             {
+                case Hash.MD4:
+                    digest = Crypto.MD4(rawInput);
+                    break;
+
                 case Hash.MD5:
-                    return MD5(baseString);
+                    digest = Crypto.MD5(rawInput);
+                    break;
 
                 case Hash.SHA1:
-                    return SHA1(baseString);
+                    digest = Crypto.SHA1(rawInput);
+                    break;
 
                 case Hash.SHA256:
-                    return SHA256(baseString);
+                    digest = Crypto.SHA256(rawInput);
+                    break;
 
                 case Hash.SHA384:
-                    return SHA384(baseString);
+                    digest = Crypto.SHA384(rawInput);
+                    break;
 
                 case Hash.SHA512:
-                    return SHA512(baseString);
+                    digest = Crypto.SHA512(rawInput);
+                    break;
 
                 default:
-                    return "UNRECOGNIZED HASH TYPE";
+                    throw new NotSupportedException("Unsupported algorithm");
             }
+
+            return digest.ToHex();
         }
 
         /// <summary>
@@ -754,244 +950,44 @@ namespace RuriLib
         /// <param name="baseString">The message to sign</param>
         /// <param name="type">The hashing function</param>
         /// <param name="key">The HMAC key</param>
-        /// <param name="base64">Whether the output should be encrypted as a base64 string</param>
+        /// <param name="inputBase64">Whether the input string should be treated as base64 encoded (if false, it will be treated as UTF8 encoded)</param>
+        /// <param name="keyBase64">Whether the key string should be treated as base64 encoded (if false, it will be treated as UTF8 encoded)</param>
+        /// <param name="outputBase64">Whether the output should be encrypted as a base64 string</param>
         /// <returns>The HMAC signature</returns>
-        public static string Hmac(string baseString, Hash type, string key, bool base64)
+        public static string Hmac(string baseString, Hash type, string key, bool inputBase64, bool keyBase64, bool outputBase64)
         {
+            byte[] rawInput = inputBase64 ? Convert.FromBase64String(baseString) : Encoding.UTF8.GetBytes(baseString);
+            byte[] rawKey = keyBase64 ? Convert.FromBase64String(key) : Encoding.UTF8.GetBytes(key);
+            byte[] signature;
+
             switch (type)
             {
                 case Hash.MD5:
-                    return HMACMD5(baseString, key, base64);
+                    signature = Crypto.HMACMD5(rawInput, rawKey);
+                    break;
 
                 case Hash.SHA1:
-                    return HMACSHA1(baseString, key, base64);
+                    signature = Crypto.HMACSHA1(rawInput, rawKey);
+                    break;
 
                 case Hash.SHA256:
-                    return HMACSHA256(baseString, key, base64);
+                    signature = Crypto.HMACSHA256(rawInput, rawKey);
+                    break;
 
                 case Hash.SHA384:
-                    return HMACSHA384(baseString, key, base64);
+                    signature = Crypto.HMACSHA384(rawInput, rawKey);
+                    break;
 
                 case Hash.SHA512:
-                    return HMACSHA512(baseString, key, base64);
+                    signature = Crypto.HMACSHA512(rawInput, rawKey);
+                    break;
 
                 default:
-                    return "UNRECOGNIZED HASH TYPE";
-            }
-        }
-
-        private static string MD5(string input)
-        {
-            MD5 md5 = System.Security.Cryptography.MD5.Create();
-            byte[] inputBytes = System.Text.Encoding.ASCII.GetBytes(input);
-            byte[] hash = md5.ComputeHash(inputBytes);
-            StringBuilder sb = new StringBuilder();
-            foreach (byte b in hash)
-                sb.Append(b.ToString("X2"));
-            return sb.ToString();
-        }
-
-        private static string HMACMD5(string input, string key, bool base64)
-        {
-            HMACMD5 hmac = new HMACMD5(System.Text.Encoding.ASCII.GetBytes(key));
-            var hash = hmac.ComputeHash(System.Text.Encoding.ASCII.GetBytes(input));
-            if (base64) { return Convert.ToBase64String(hash); }
-            else { return ToHex(hash); }
-        }
-
-        private static string SHA1(string input)
-        {
-            using (SHA1Managed sha1 = new SHA1Managed())
-            {
-                var hash = sha1.ComputeHash(Encoding.UTF8.GetBytes(input));
-                var sb = new StringBuilder(hash.Length * 2);
-                foreach (byte b in hash)
-                    sb.Append(b.ToString("X2"));
-                return sb.ToString();
-            }
-        }
-
-        private static string HMACSHA1(string input, string key, bool base64)
-        {
-            HMACSHA1 hmac = new HMACSHA1(System.Text.Encoding.ASCII.GetBytes(key));
-            var hash = hmac.ComputeHash(System.Text.Encoding.ASCII.GetBytes(input));
-            if (base64) { return Convert.ToBase64String(hash); }
-            else { return ToHex(hash); }
-        }
-
-        private static string SHA256(string input)
-        {
-            using (SHA256Managed sha256 = new SHA256Managed())
-            {
-                var hash = sha256.ComputeHash(Encoding.UTF8.GetBytes(input));
-                var sb = new StringBuilder(hash.Length * 2);
-                foreach (byte b in hash)
-                    sb.Append(b.ToString("X2"));
-                return sb.ToString();
-            }
-        }
-
-        private static string HMACSHA256(string input, string key, bool base64)
-        {
-            HMACSHA256 hmac = new HMACSHA256(System.Text.Encoding.ASCII.GetBytes(key));
-            var hash = hmac.ComputeHash(System.Text.Encoding.ASCII.GetBytes(input));
-            if (base64) { return Convert.ToBase64String(hash); }
-            else { return ToHex(hash); }
-        }
-
-        private static string SHA384(string input)
-        {
-            using (SHA384Managed sha384 = new SHA384Managed())
-            {
-                var hash = sha384.ComputeHash(Encoding.UTF8.GetBytes(input));
-                var sb = new StringBuilder(hash.Length * 2);
-                foreach (byte b in hash)
-                    sb.Append(b.ToString("X2"));
-                return sb.ToString();
-            }
-        }
-
-        private static string HMACSHA384(string input, string key, bool base64)
-        {
-            HMACSHA384 hmac = new HMACSHA384(System.Text.Encoding.ASCII.GetBytes(key));
-            var hash = hmac.ComputeHash(System.Text.Encoding.ASCII.GetBytes(input));
-            if (base64) { return Convert.ToBase64String(hash); }
-            else { return ToHex(hash); }
-        }
-
-        private static string SHA512(string input)
-        {
-            using (SHA512Managed sha512 = new SHA512Managed())
-            {
-                var hash = sha512.ComputeHash(Encoding.UTF8.GetBytes(input));
-                var sb = new StringBuilder(hash.Length * 2);
-                foreach (byte b in hash)
-                    sb.Append(b.ToString("X2"));
-                return sb.ToString();
-            }
-        }
-
-        private static string HMACSHA512(string input, string key, bool base64)
-        {
-            HMACSHA512 hmac = new HMACSHA512(System.Text.Encoding.ASCII.GetBytes(key));
-            var hash = hmac.ComputeHash(System.Text.Encoding.ASCII.GetBytes(input));
-            if (base64) { return Convert.ToBase64String(hash); }
-            else { return ToHex(hash); }
-        }
-
-        private static string ToHex(byte[] bytes)
-        {
-            var sb = new StringBuilder(bytes.Length * 2);
-            foreach (byte b in bytes)
-                sb.Append(b.ToString("X2"));
-            return sb.ToString();
-        }
-
-        #endregion
-
-        #region RSA
-        private string RSAEncrypt(string input, int size)
-        {
-            var data = Encoding.UTF8.GetBytes(input);
-
-            using (var rsa = new RSACryptoServiceProvider(size))
-            {
-                try
-                {              
-                    rsa.FromXmlString(input);
-                    var encryptedData = rsa.Encrypt(data, true);
-                    Console.WriteLine(Convert.ToString(encryptedData));
-                    return Convert.ToString(encryptedData);
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine(ex.ToString());
-                    return "";
-                }
-                finally
-                {
-                    rsa.PersistKeyInCsp = false;
-                }
-            }
-        }
-
-        private string RSADecrypt(string input, int size)
-        {
-            var data = Encoding.UTF8.GetBytes(input);
-
-            using (var rsa = new RSACryptoServiceProvider(size))
-            {
-                try
-                {
-                    rsa.FromXmlString(input);
-                    var resultBytes = System.Text.Encoding.ASCII.GetBytes(input);
-                    var decryptedBytes = rsa.Decrypt(resultBytes, true);
-                    return Encoding.UTF8.GetString(decryptedBytes);
-                }
-                finally
-                {
-                    rsa.PersistKeyInCsp = false;
-                }
-            }
-        }
-
-        
-        private string SteamRSAEncrypt(RsaParameters rsaParam)
-        {
-            // Convert the public keys to BigIntegers
-            var modulus = CreateBigInteger(rsaParam.Modulus);
-            var exponent = CreateBigInteger(rsaParam.Exponent);
-
-            // (modulus.ToByteArray().Length - 1) * 8
-            //modulus has 256 bytes multiplied by 8 bits equals 2048
-            var encryptedNumber = Pkcs1Pad2(rsaParam.Password, (2048 + 7) >> 3);
-
-            // And now, the RSA encryption
-            encryptedNumber = System.Numerics.BigInteger.ModPow(encryptedNumber, exponent, modulus);
-
-            //Reverse number and convert to base64
-            var encryptedString = Convert.ToBase64String(encryptedNumber.ToByteArray().Reverse().ToArray());
-
-            return encryptedString;
-        }
-
-        private static System.Numerics.BigInteger CreateBigInteger(string hex)
-        {
-            return System.Numerics.BigInteger.Parse("00" + hex, NumberStyles.AllowHexSpecifier);
-        }
-
-        
-        private static System.Numerics.BigInteger Pkcs1Pad2(string data, int keySize)
-        {
-            if (keySize < data.Length + 11)
-                return new System.Numerics.BigInteger();
-
-            var buffer = new byte[256];
-            var i = data.Length - 1;
-
-            while (i >= 0 && keySize > 0)
-            {
-                buffer[--keySize] = (byte)data[i--];
+                    throw new NotSupportedException("Unsupported algorithm");
             }
 
-            // Padding, I think
-            var random = new Random();
-            buffer[--keySize] = 0;
-            while (keySize > 2)
-            {
-                buffer[--keySize] = (byte)random.Next(1, 256);
-                //buffer[--keySize] = 5;
-            }
-
-            buffer[--keySize] = 2;
-            buffer[--keySize] = 0;
-
-            Array.Reverse(buffer);
-
-            return new System.Numerics.BigInteger(buffer);
+            return outputBase64 ? Convert.ToBase64String(signature) : signature.ToHex();
         }
-
-        #endregion
 
         #region Translation
 
@@ -1051,200 +1047,20 @@ namespace RuriLib
         }
         #endregion
 
-        #region RandomString
-        private string ReplaceFirst(string text, string search, string replace)
+        #region Others
+        /// <summary>
+        /// Splits a string in chunks of a given size.
+        /// </summary>
+        /// <param name="str">The string to split</param>
+        /// <param name="chunkSize">The maximum chunk size</param>
+        /// <returns>An array of strings where the last one might be shorter than the maximum chunk size.</returns>
+        public static string[] SplitInChunks(string str, int chunkSize)
         {
-            int pos = text.IndexOf(search);
-            if (pos < 0)
-            {
-                return text;
-            }
-            return text.Substring(0, pos) + replace + text.Substring(pos + search.Length);
+            if (str.Length < chunkSize) return new string[] { str };
+            return Enumerable.Range(0, (int)Math.Ceiling((double)str.Length / (double)chunkSize))
+                .Select(i => str.Substring(i * chunkSize, Math.Min(str.Length - i * chunkSize, chunkSize)))
+                .ToArray();
         }
         #endregion
-
-        #region AES
-        /// <summary>
-        /// Encrypts a string with AES.
-        /// </summary>
-        /// <param name="key">The encryption key</param>
-        /// <param name="data">The data to encrypt</param>
-        /// <returns>The AES-encrypted string</returns>
-        public static string AESEncrypt(string key, string data)
-        {
-            string encData = null;
-            byte[][] keys = GetHashKeys(key);
-
-            try
-            {
-                encData = EncryptStringToBytes_Aes(data, keys[0], keys[1]);
-            }
-            catch (CryptographicException) { }
-            catch (ArgumentNullException) { }
-
-            return encData;
-        }
-
-        /// <summary>
-        /// Decrypts an AES-encrypted string.
-        /// </summary>
-        /// <param name="key">The decryption key</param>
-        /// <param name="data">The AES-encrypted data</param>
-        /// <returns>The plaintext string</returns>
-        public static string AESDecrypt(string key, string data)
-        {
-            string decData = null;
-            byte[][] keys = GetHashKeys(key);
-
-            try
-            {
-                decData = DecryptStringFromBytes_Aes(data, keys[0], keys[1]);
-            }
-            catch (CryptographicException) { }
-            catch (ArgumentNullException) { }
-
-            return decData;
-        }
-
-        private static byte[][] GetHashKeys(string key)
-        {
-            byte[][] result = new byte[2][];
-            Encoding enc = Encoding.UTF8;
-
-            SHA256 sha2 = new SHA256CryptoServiceProvider();
-
-            byte[] rawKey = enc.GetBytes(key);
-            byte[] rawIV = enc.GetBytes(key);
-
-            byte[] hashKey = sha2.ComputeHash(rawKey);
-            byte[] hashIV = sha2.ComputeHash(rawIV);
-
-            Array.Resize(ref hashIV, 16);
-
-            result[0] = hashKey;
-            result[1] = hashIV;
-
-            return result;
-        }
-
-        private static string EncryptStringToBytes_Aes(string plainText, byte[] Key, byte[] IV)
-        {
-            if (plainText == null || plainText.Length <= 0)
-                throw new ArgumentNullException("plainText");
-            if (Key == null || Key.Length <= 0)
-                throw new ArgumentNullException("Key");
-            if (IV == null || IV.Length <= 0)
-                throw new ArgumentNullException("IV");
-
-            byte[] encrypted;
-
-            using (AesManaged aesAlg = new AesManaged())
-            {
-                aesAlg.Key = Key;
-                aesAlg.IV = IV;
-
-                ICryptoTransform encryptor = aesAlg.CreateEncryptor(aesAlg.Key, aesAlg.IV);
-
-                using (MemoryStream msEncrypt = new MemoryStream())
-                {
-                    using (CryptoStream csEncrypt =
-                            new CryptoStream(msEncrypt, encryptor, CryptoStreamMode.Write))
-                    {
-                        using (StreamWriter swEncrypt = new StreamWriter(csEncrypt))
-                        {
-                            swEncrypt.Write(plainText);
-                        }
-                        encrypted = msEncrypt.ToArray();
-                    }
-                }
-            }
-            return Convert.ToBase64String(encrypted);
-        }
-
-        private static string DecryptStringFromBytes_Aes(string cipherTextString, byte[] Key, byte[] IV)
-        {
-            byte[] cipherText = Convert.FromBase64String(cipherTextString);
-
-            if (cipherText == null || cipherText.Length <= 0)
-                throw new ArgumentNullException("cipherText");
-            if (Key == null || Key.Length <= 0)
-                throw new ArgumentNullException("Key");
-            if (IV == null || IV.Length <= 0)
-                throw new ArgumentNullException("IV");
-
-            string plaintext = null;
-
-            using (Aes aesAlg = Aes.Create())
-            {
-                aesAlg.Key = Key;
-                aesAlg.IV = IV;
-
-                ICryptoTransform decryptor = aesAlg.CreateDecryptor(aesAlg.Key, aesAlg.IV);
-
-                using (MemoryStream msDecrypt = new MemoryStream(cipherText))
-                {
-                    using (CryptoStream csDecrypt =
-                            new CryptoStream(msDecrypt, decryptor, CryptoStreamMode.Read))
-                    {
-                        using (StreamReader srDecrypt = new StreamReader(csDecrypt))
-                        {
-                            plaintext = srDecrypt.ReadToEnd();
-                        }
-                    }
-                }
-            }
-            return plaintext;
-        }
-        #endregion
-
-        #region RandomUA
-
-        // All credits for this method goes to the Leaf.xNet fork of Extreme.NET
-        // https://github.com/csharp-leaf/Leaf.xNet
-
-        /// <summary>
-        /// Gets a random User-Agent header.
-        /// </summary>
-        /// <param name="rand">A random number generator</param>
-        /// <returns>A randomly generated User-Agent header</returns>
-        public static string RandomUserAgent(Random rand)
-        {
-            int random = rand.Next(99) + 1;
-
-            // Chrome = 70%
-            if (random >= 1 && random <= 70)
-                return Http.ChromeUserAgent();
-
-            // Firefox = 15%
-            if (random > 70 && random <= 85)
-                return Http.FirefoxUserAgent();
-
-            // IE = 6%
-            if (random > 85 && random <= 91)
-                return Http.IEUserAgent();
-
-            // Opera 12 = 5%
-            if (random > 91 && random <= 96)
-                return Http.OperaUserAgent();
-
-            // Opera mini = 4%
-            return Http.OperaMiniUserAgent();
-        }
-        #endregion
-    }
-
-    /// <summary>
-    /// The RSA parameters.
-    /// </summary>
-    struct RsaParameters
-    {
-        /// <summary>The key exponent.</summary>
-        public string Exponent;
-
-        /// <summary>The key modulus.</summary>
-        public string Modulus;
-
-        /// <summary>The encryption password.</summary>
-        public string Password;
     }
 }

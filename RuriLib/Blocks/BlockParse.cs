@@ -1,11 +1,13 @@
-﻿using AngleSharp.Parser.Html;
+﻿using AngleSharp.Html.Parser;
 using Extreme.Net;
 using Newtonsoft.Json.Linq;
 using RuriLib.LS;
+using RuriLib.Utils.Parsing;
 using System;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
 using System.Windows.Media;
+using System.Linq;
 
 namespace RuriLib
 {
@@ -59,6 +61,22 @@ namespace RuriLib
         /// <summary>Whether to parse multiple values that match the criteria or just the first one.</summary>
         public bool Recursive { get { return recursive; } set { recursive = value; OnPropertyChanged(); } }
 
+        private bool dotMatches = false;
+        /// <summary>Whether Regex . matches over multiple lines.</summary>
+        public bool DotMatches { get { return dotMatches; } set { dotMatches = value; OnPropertyChanged(); } }
+
+        private bool caseSensitive = true;
+        /// <summary>Whether Regex matches are case sensitive.</summary>
+        public bool CaseSensitive { get { return caseSensitive; } set { caseSensitive = value; OnPropertyChanged(); } }
+
+        private bool encodeOutput = false;
+        /// <summary>Whether to URL encode the parsed text.</summary>
+        public bool EncodeOutput { get { return encodeOutput; } set { encodeOutput = value; OnPropertyChanged(); } }
+
+        private bool createEmpty = true;
+        /// <summary>Whether to create the variable with an empty value if the parsing was not successful.</summary>
+        public bool CreateEmpty { get { return createEmpty; } set { createEmpty = value; OnPropertyChanged(); } }
+
         private ParseType type = ParseType.LR;
         /// <summary>The parsing algorithm being used.</summary>
         public ParseType Type { get { return type; } set { type = value; OnPropertyChanged(); } }
@@ -95,6 +113,10 @@ namespace RuriLib
         private string jsonField = "";
         /// <summary>The name of the json field for which we want to retrieve the value.</summary>
         public string JsonField { get { return jsonField; } set { jsonField = value; OnPropertyChanged(); } }
+
+        private bool jTokenParsing = false;
+        /// <summary>Whether to parse the json object using jtoken paths.</summary>
+        public bool JTokenParsing { get { return jTokenParsing; } set { jTokenParsing = value; OnPropertyChanged(); } }
         #endregion
 
         #region REGEX
@@ -147,12 +169,14 @@ namespace RuriLib
                         LineParser.SetBool(ref input, this);
                     else if (LineParser.Lookahead(ref input) == TokenType.Integer)
                         CssElementIndex = LineParser.ParseInt(ref input, "INDEX");
+                    while (LineParser.Lookahead(ref input) == TokenType.Boolean)
+                        LineParser.SetBool(ref input, this);
                     break;
 
                 case ParseType.JSON:
                     // PARSE "<SOURCE>" JSON "Field" ->
                     JsonField = LineParser.ParseLiteral(ref input, "FIELD");
-                    if (LineParser.Lookahead(ref input) == TokenType.Boolean)
+                    while (LineParser.Lookahead(ref input) == TokenType.Boolean)
                         LineParser.SetBool(ref input, this);
                     break;
 
@@ -160,7 +184,7 @@ namespace RuriLib
                     // PARSE "<SOURCE>" REGEX "Pattern" "Output" RECURSIVE? -> 
                     RegexString = LineParser.ParseLiteral(ref input, "PATTERN");
                     RegexOutput = LineParser.ParseLiteral(ref input, "OUTPUT");
-                    if (LineParser.Lookahead(ref input) == TokenType.Boolean)
+                    while (LineParser.Lookahead(ref input) == TokenType.Boolean)
                         LineParser.SetBool(ref input, this);
                     break;
             }
@@ -209,6 +233,8 @@ namespace RuriLib
                         .Literal(LeftString)
                         .Literal(RightString)
                         .Boolean(Recursive, "Recursive")
+                        .Boolean(EncodeOutput, "EncodeOutput")
+                        .Boolean(CreateEmpty, "CreateEmpty")
                         .Boolean(UseRegexLR, "UseRegexLR");
                     break;
 
@@ -218,19 +244,30 @@ namespace RuriLib
                         .Literal(AttributeName);
                     if (Recursive) writer.Boolean(Recursive, "Recursive");
                     else writer.Integer(CssElementIndex, "CssElementIndex");
+
+                    writer
+                        .Boolean(EncodeOutput, "EncodeOutput")
+                        .Boolean(CreateEmpty, "CreateEmpty");
                     break;
 
                 case ParseType.JSON:
                     writer
                         .Literal(JsonField)
-                        .Boolean(Recursive, "Recursive");
+                        .Boolean(JTokenParsing, "JTokenParsing")
+                        .Boolean(Recursive, "Recursive")
+                        .Boolean(EncodeOutput, "EncodeOutput")
+                        .Boolean(CreateEmpty, "CreateEmpty");
                     break;
 
                 case ParseType.REGEX:
                     writer
                         .Literal(RegexString)
                         .Literal(RegexOutput)
-                        .Boolean(Recursive, "Recursive");
+                        .Boolean(Recursive, "Recursive")
+                        .Boolean(EncodeOutput, "EncodeOutput")
+                        .Boolean(CreateEmpty, "CreateEmpty")
+                        .Boolean(DotMatches, "DotMatches")
+                        .Boolean(CaseSensitive, "CaseSensitive");
                     break;
             }
 
@@ -250,232 +287,38 @@ namespace RuriLib
         {
             base.Process(data);
 
-            InsertVariables(data, isCapture, recursive, Parse(data), variableName, prefix, suffix);
-        }
-
-        private List<string> Parse(BotData data)
-        {
             var original = ReplaceValues(parseTarget, data);
-            var partial = original;
             var list = new List<string>();
 
             // Parse the value
             switch (Type)
             {
                 case ParseType.LR:
-                    var ls = ReplaceValues(leftString, data);
-                    var rs = ReplaceValues(rightString, data);
-                    var pFrom = 0;
-                    var pTo = 0;
-
-                    // No L and R = return full input
-                    if (ls == "" && rs == "")
-                    {
-                        list.Add(original);
-                        break;
-                    }
-
-                    // L or R not present and not empty
-                    else if ( ((!partial.Contains(ls) && ls != "") || (!partial.Contains(rs) && rs != "")))
-                    {
-                        list.Add("");
-                        break;
-                    }
-                    
-                    // Instead of the mess below, we could simply use Extreme.NET's Substring extensions
-                    // return original.Substrings(ls, rs); // Recursive
-                    // return original.Substring(ls, rs); // Not recursive
-
-                    if (recursive)
-                    {
-                        if (useRegexLR)
-                        {
-                            try
-                            {
-                                var pattern = BuildLRPattern(ls, rs);
-                                MatchCollection mc = Regex.Matches(partial, pattern);
-                                foreach (Match m in mc)
-                                    list.Add(m.Value);
-                            }
-                            catch { }
-                        }
-                        else
-                        {
-                            try
-                            {
-                                while ((partial.Contains(ls) || ls == "") && (partial.Contains(rs) || rs == ""))
-                                {
-                                    // Search for left delimiter and Calculate offset
-                                    pFrom = ls == "" ? 0 : partial.IndexOf(ls) + ls.Length;
-                                    // Move right of offset
-                                    partial = partial.Substring(pFrom);
-                                    // Search for right delimiter and Calculate length to parse
-                                    pTo = rs == "" ? (partial.Length - 1) : partial.IndexOf(rs);
-                                    // Parse it
-                                    var parsed = partial.Substring(0, pTo);
-                                    list.Add(parsed);
-                                    // Move right of parsed + right
-                                    partial = partial.Substring(parsed.Length + rs.Length);
-                                }
-                            }
-                            catch { }
-                        }
-                    }
-
-                    // Non-recursive
-                    else
-                    {
-                        if (useRegexLR)
-                        {
-                            var pattern = BuildLRPattern(ls, rs);
-                            MatchCollection mc = Regex.Matches(partial, pattern);
-                            if (mc.Count > 0) list.Add(mc[0].Value);
-                        }
-                        else
-                        {
-                            try
-                            {
-                                pFrom = ls == "" ? 0 : partial.IndexOf(ls) + ls.Length;
-                                partial = partial.Substring(pFrom);
-                                pTo = rs == "" ? partial.Length : partial.IndexOf(rs);
-                                list.Add(partial.Substring(0, pTo));
-                            }
-                            catch { }
-                        }
-                    }
-
+                    list = Parse.LR(original, ReplaceValues(leftString, data), ReplaceValues(rightString, data), recursive, useRegexLR).ToList();
                     break;
 
                 case ParseType.CSS:
-
-                    HtmlParser parser = new HtmlParser();
-                    AngleSharp.Dom.Html.IHtmlDocument document = null;
-                    try { document = parser.Parse(original); } catch { list.Add(""); }
-
-                    try
-                    {
-                        if (recursive)
-                        {
-                            foreach(var element in document.QuerySelectorAll(ReplaceValues(cssSelector,data)))
-                            {
-                                switch (ReplaceValues(attributeName, data))
-                                {
-                                    case "innerHTML":
-                                        list.Add(element.InnerHtml);
-                                        break;
-                                    case "outerHTML":
-                                        list.Add(element.OuterHtml);
-                                        break;
-                                    default:
-                                        foreach(var attr in element.Attributes)
-                                        {
-                                            if(attr.Name == ReplaceValues(attributeName,data))
-                                            {
-                                                list.Add(attr.Value);
-                                                break;
-                                            }
-                                        }
-                                        break;
-                                }
-                            }
-                        }
-                        else
-                        {
-                            switch (ReplaceValues(attributeName, data))
-                            {
-                                case "innerHTML":
-                                    list.Add(document.QuerySelectorAll(ReplaceValues(cssSelector, data))[cssElementIndex].InnerHtml);
-                                    break;
-
-                                case "outerHTML":
-                                    list.Add(document.QuerySelectorAll(ReplaceValues(cssSelector, data))[cssElementIndex].OuterHtml);
-                                    break;
-
-                                default:
-                                    foreach (var attr in document.QuerySelectorAll(ReplaceValues(cssSelector, data))[cssElementIndex].Attributes)
-                                    {
-                                        if (attr.Name == ReplaceValues(attributeName, data))
-                                        {
-                                            list.Add(attr.Value);
-                                            break;
-                                        }
-                                    }
-                                    break;
-                            }
-                        }
-                    }
-                    catch { list.Add(""); }
-
+                    list = Parse.CSS(original, ReplaceValues(cssSelector, data), ReplaceValues(attributeName, data), cssElementIndex, recursive).ToList();
                     break;
 
                 case ParseType.JSON:
-                    var jsonlist = new List<KeyValuePair<string, string>>();
-                    parseJSON("", original, jsonlist);
-                    foreach(var j in jsonlist)
-                        if (j.Key == ReplaceValues(jsonField, data))
-                            list.Add(j.Value);
-
-                    if (list.Count == 0) list.Add("");
+                    list = Parse.JSON(original, ReplaceValues(jsonField, data), recursive, jTokenParsing).ToList();
                     break;
 
                 case ParseType.XPATH:
-
-                    // NOT IMPLEMENTED YET
-                    break;
+                    throw new NotImplementedException("XPATH parsing is not implemented yet");
 
                 case ParseType.REGEX:
-                    REGEXBEGIN:
-                    try
-                    {
-                        var matches = Regex.Matches(partial, ReplaceValues(regexString, data));
-                        foreach(Match match in matches)
-                        {
-                            var output = ReplaceValues(regexOutput, data);
-                            for (var i = 0; i < match.Groups.Count; i++) output = output.Replace("[" + i + "]", match.Groups[i].Value);
-                            list.Add(output);
-                            if (recursive && match.Index + match.Length <= partial.Length) { partial = partial.Substring(match.Index + match.Length); goto REGEXBEGIN; }
-                        }
-                    }
-                    catch { }
+                    RegexOptions regexOptions = new RegexOptions();
+                    if (dotMatches)
+                        regexOptions |= RegexOptions.Singleline;
+                    if (caseSensitive == false)
+                        regexOptions |= RegexOptions.IgnoreCase;
+                    list = Parse.REGEX(original, ReplaceValues(regexString, data), ReplaceValues(regexOutput, data), recursive, regexOptions).ToList();
                     break;
             }
 
-            return list;
-        }
-
-        private string BuildLRPattern(string ls, string rs)
-        {
-            var left = string.IsNullOrEmpty(ls) ? "^" : Regex.Escape(ls); // Empty LEFT = start of the line
-            var right = string.IsNullOrEmpty(rs) ? "$" : Regex.Escape(rs); // Empty RIGHT = end of the line
-            return "(?<=" + left + ").+?(?=" + right + ")";
-        }
-
-        private static void parseJSON(string A, string B, List<KeyValuePair<string, string>> jsonlist)
-        {
-            jsonlist.Add(new KeyValuePair<string, string>(A, B));
-
-            if (B.StartsWith("["))
-            {
-                JArray arr = null;
-                try { arr = JArray.Parse(B); } catch { return; }
-
-                foreach (var i in arr.Children())
-                    parseJSON("", i.ToString(), jsonlist);
-            }
-
-            if (B.Contains("{"))
-            {
-                JObject obj = null;
-                try { obj = JObject.Parse(B); } catch { return; }
-
-                foreach (var o in obj)
-                    parseJSON(o.Key, o.Value.ToString(), jsonlist);
-            }
-        }
-        
-        private string cleanString(string inputString)
-        {
-            return Regex.Replace(inputString, "<br>", "").Trim();
+            InsertVariable(data, isCapture, recursive, list, variableName, prefix, suffix, encodeOutput, createEmpty);
         }
     }
 }

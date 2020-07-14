@@ -1,12 +1,15 @@
-﻿using RuriLib.LS;
+﻿using RuriLib.Functions.Conditions;
+using RuriLib.Functions.Conversions;
+using RuriLib.Functions.Files;
+using RuriLib.LS;
 using RuriLib.Models;
 using RuriLib.ViewModels;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Numerics;
-using System.Text;
 using System.Windows.Media;
 
 namespace RuriLib
@@ -26,7 +29,10 @@ namespace RuriLib
         Conversion,
 
         /// <summary>The group of actions that interact with files.</summary>
-        File
+        File,
+
+        /// <summary>The group of actions that interact with folders.</summary>
+        Folder
     }
 
     /// <summary>
@@ -52,6 +58,9 @@ namespace RuriLib
         /// <summary>Joins a list into a single string, separating the elements with a separator.</summary>
         Join,
 
+        /// <summary>Sorts a list alphabetically, in ascending or descending order.</summary>
+        Sort,
+
         /// <summary>Concatenates two lists into a longer list variable.</summary>
         Concat,
 
@@ -64,26 +73,20 @@ namespace RuriLib
         /// <summary>Adds an element to a list variable.</summary>
         Add,
 
-        /// <summary>Removes an element from a list variable.</summary>
+        /// <summary>Removes an element from a list variable given its index.</summary>
         Remove,
 
+        /// <summary>Removes one ore more elements from a list variable given their value.</summary>
+        RemoveValues,
+
+        /// <summary>Removes duplicate elements from a list variable, keeping only the first one.</summary>
+        RemoveDuplicates,
+
         /// <summary>Picks a random element from a list variable.</summary>
-        Random
-    }
+        Random,
 
-    /// <summary>
-    /// The available conversion formats.
-    /// </summary>
-    public enum Conversion
-    {
-        /// <summary>A hexadecimal representation of a byte array.</summary>
-        HEX,
-
-        /// <summary>A binary representation of a byte array, containing a multiple of 8 binary digits.</summary>
-        BIN,
-
-        /// <summary>A base64 representation of a byte array.</summary>
-        BASE64
+        /// <summary>Randomizes the order of elements in a list.</summary>
+        Shuffle
     }
 
     /// <summary>
@@ -91,6 +94,9 @@ namespace RuriLib
     /// </summary>
     public enum FileAction
     {
+        /// <summary>Checks if a file exists.</summary>
+        Exists,
+
         /// <summary>Reads a file to a single variable.</summary>
         Read,
 
@@ -107,7 +113,31 @@ namespace RuriLib
         Append,
 
         /// <summary>Appends a list variable to a file.</summary>
-        AppendLines
+        AppendLines,
+
+        /// <summary>Copies a file to a new file.</summary>
+        Copy,
+
+        /// <summary>Moves a file to a different location.</summary>
+        Move,
+
+        /// <summary>Deletes a file in the OB folder.</summary>
+        Delete
+    }
+
+    /// <summary>
+    /// Actions that can be performed on folders.
+    /// </summary>
+    public enum FolderAction
+    {
+        /// <summary>Checks if a folder exists.</summary>
+        Exists,
+
+        /// <summary>Creates a folder.</summary>
+        Create,
+
+        /// <summary>Deletes a folder.</summary>
+        Delete
     }
 
     /// <summary>
@@ -146,6 +176,14 @@ namespace RuriLib
         /// <summary>The separator for joining a list.</summary>
         public string Separator { get { return separator; } set { separator = value; OnPropertyChanged(); } }
 
+        private bool ascending = true;
+        /// <summary>Whether the sort should happen in ascending order.</summary>
+        public bool Ascending { get { return ascending; } set { ascending = value; OnPropertyChanged(); } }
+
+        private bool numeric = false;
+        /// <summary>Whether a list is made of numeric values.</summary>
+        public bool Numeric { get { return numeric; } set { numeric = value; OnPropertyChanged(); } }
+
         private string secondListName = ""; // Zip
         /// <summary>The name of the second list variable.</summary>
         public string SecondListName { get { return secondListName; } set { secondListName = value; OnPropertyChanged(); } }
@@ -157,6 +195,14 @@ namespace RuriLib
         private string listIndex = "-1"; // Add (-1 = end, 0 = start)
         /// <summary>The list index where an item can be added/removed. -1 = end, 0 = start.</summary>
         public string ListIndex { get { return listIndex; } set { listIndex = value; OnPropertyChanged(); } }
+
+        private Comparer listElementComparer = Comparer.EqualTo;
+        /// <summary>The comparer to use when removing or modifying one or more elements of a list.</summary>
+        public Comparer ListElementComparer { get { return listElementComparer; } set { listElementComparer = value; OnPropertyChanged(); } }
+
+        private string listComparisonTerm = "";
+        /// <summary>The string that elements in a list should be compared to.</summary>
+        public string ListComparisonTerm { get { return listComparisonTerm; } set { listComparisonTerm = value; OnPropertyChanged(); } }
         #endregion
 
         // Variables
@@ -175,22 +221,31 @@ namespace RuriLib
         #endregion
 
         // Conversion
-        private Conversion conversionFrom = Conversion.HEX;
+        private Encoding conversionFrom = Encoding.HEX;
         /// <summary>The encoding to convert from.</summary>
-        public Conversion ConversionFrom { get { return conversionFrom; } set { conversionFrom = value; OnPropertyChanged(); } }
+        public Encoding ConversionFrom { get { return conversionFrom; } set { conversionFrom = value; OnPropertyChanged(); } }
 
-        private Conversion conversionTo = Conversion.BASE64;
+        private Encoding conversionTo = Encoding.BASE64;
         /// <summary>The encoding to convert to.</summary>
-        public Conversion ConversionTo { get { return conversionTo; } set { conversionTo = value; OnPropertyChanged(); } }
+        public Encoding ConversionTo { get { return conversionTo; } set { conversionTo = value; OnPropertyChanged(); } }
 
         // Files
         private string filePath = "test.txt";
-        /// <summary>The path to the file to read/write.</summary>
+        /// <summary>The path to the file to interact with.</summary>
         public string FilePath { get { return filePath; } set { filePath = value; OnPropertyChanged(); } }
 
         private FileAction fileAction = FileAction.Read;
         /// <summary>The action to be performed on the file.</summary>
         public FileAction FileAction { get { return fileAction; } set { fileAction = value; OnPropertyChanged(); } }
+
+        // Folders
+        private string folderPath = "TestFolder";
+        /// <summary>The path to the folder to interact with.</summary>
+        public string FolderPath { get { return folderPath; } set { folderPath = value; OnPropertyChanged(); } }
+
+        private FolderAction folderAction = FolderAction.Create;
+        /// <summary>The action to be performed on the folder.</summary>
+        public FolderAction FolderAction { get { return folderAction; } set { folderAction = value; OnPropertyChanged(); } }
 
         /// <summary>
         /// Creates a Utility block.
@@ -227,6 +282,11 @@ namespace RuriLib
                             Separator = LineParser.ParseLiteral(ref input, "Separator");
                             break;
 
+                        case ListAction.Sort:
+                            while (LineParser.Lookahead(ref input) == TokenType.Boolean)
+                                LineParser.SetBool(ref input, this);
+                            break;
+
                         case ListAction.Concat:
                         case ListAction.Zip:
                         case ListAction.Map:
@@ -241,6 +301,11 @@ namespace RuriLib
                         case ListAction.Remove:
                             ListIndex = LineParser.ParseLiteral(ref input, "Index");
                             break;
+
+                        case ListAction.RemoveValues:
+                            ListElementComparer = LineParser.ParseEnum(ref input, "Comparer", typeof(Comparer));
+                            ListComparisonTerm = LineParser.ParseLiteral(ref input, "Comparison Term");
+                            break;
                     }
                     break;
 
@@ -251,14 +316,14 @@ namespace RuriLib
                     switch (VarAction)
                     {
                         case VarAction.Split:
-                            SplitSeparator = LineParser.ParseLiteral(ref input, "Separator");
+                            SplitSeparator = LineParser.ParseLiteral(ref input, "SplitSeparator");
                             break;
                     }
                     break;
 
                 case UtilityGroup.Conversion:
-                    ConversionFrom = (Conversion)LineParser.ParseEnum(ref input, "Conversion From", typeof(Conversion));
-                    ConversionTo = (Conversion)LineParser.ParseEnum(ref input, "Conversion To", typeof(Conversion));
+                    ConversionFrom = (Encoding)LineParser.ParseEnum(ref input, "Conversion From", typeof(Encoding));
+                    ConversionTo = (Encoding)LineParser.ParseEnum(ref input, "Conversion To", typeof(Encoding));
                     InputString = LineParser.ParseLiteral(ref input, "Input");
                     break;
 
@@ -272,14 +337,21 @@ namespace RuriLib
                         case FileAction.WriteLines:
                         case FileAction.Append:
                         case FileAction.AppendLines:
+                        case FileAction.Copy:
+                        case FileAction.Move:
                             InputString = LineParser.ParseLiteral(ref input, "Input String");
                             break;
                     }
                     break;
+
+                case UtilityGroup.Folder:
+                    FolderPath = LineParser.ParseLiteral(ref input, "Folder Name");
+                    FolderAction = (FolderAction)LineParser.ParseEnum(ref input, "Folder Action", typeof(FolderAction));
+                    break;
             }
 
             // Try to parse the arrow, otherwise just return the block as is with default var name and var / cap choice
-            if (LineParser.ParseToken(ref input, TokenType.Arrow, false) == "")
+            if (LineParser.ParseToken(ref input, TokenType.Arrow, false) == string.Empty)
                 return this;
 
             // Parse the VAR / CAP
@@ -321,6 +393,12 @@ namespace RuriLib
                                 .Literal(Separator);
                             break;
 
+                        case ListAction.Sort:
+                            writer
+                                .Boolean(Ascending, "Ascending")
+                                .Boolean(Numeric, "Numeric");
+                            break;
+
                         case ListAction.Concat:
                         case ListAction.Zip:
                         case ListAction.Map:
@@ -337,6 +415,12 @@ namespace RuriLib
                         case ListAction.Remove:
                             writer
                                 .Literal(ListIndex);
+                            break;
+
+                        case ListAction.RemoveValues:
+                            writer
+                                .Token(ListElementComparer)
+                                .Literal(ListComparisonTerm);
                             break;
                     }
                     break;
@@ -373,10 +457,18 @@ namespace RuriLib
                         case FileAction.WriteLines:
                         case FileAction.Append:
                         case FileAction.AppendLines:
+                        case FileAction.Copy:
+                        case FileAction.Move:
                             writer
                                 .Literal(InputString);
                             break;
                     }
+                    break;
+
+                case UtilityGroup.Folder:
+                    writer
+                        .Literal(FolderPath)
+                        .Token(FolderAction);
                     break;
             }
 
@@ -396,10 +488,10 @@ namespace RuriLib
 
             try
             {
+                var replacedInput = ReplaceValues(inputString, data);
                 switch (group)
                 {
                     case UtilityGroup.List:
-
                         var list = data.Variables.GetList(listName);
                         var list2 = data.Variables.GetList(secondListName);
                         var item = ReplaceValues(listItem, data);
@@ -420,6 +512,22 @@ namespace RuriLib
                                 data.Variables.Set(new CVar(variableName, string.Join(separator, list), isCapture));
                                 break;
 
+                            case ListAction.Sort:
+                                var sorted = list.Select(e => e).ToList(); // Clone the list so we don't edit the original one
+                                if (Numeric)
+                                {
+                                    var nums = sorted.Select(e => double.Parse(e, CultureInfo.InvariantCulture)).ToList();
+                                    nums.Sort();
+                                    sorted = nums.Select(e => e.ToString()).ToList();
+                                }
+                                else
+                                {
+                                    sorted.Sort();
+                                }                                
+                                if (!Ascending) sorted.Reverse();
+                                data.Variables.Set(new CVar(variableName, sorted, isCapture));
+                                break;
+
                             case ListAction.Concat:
                                 data.Variables.Set(new CVar(variableName, list.Concat(list2).ToList(), isCapture));
                                 break;
@@ -433,6 +541,7 @@ namespace RuriLib
                                 break;
 
                             case ListAction.Add:
+                                // TODO: Refactor this
                                 variable = data.Variables.Get(listName, CVar.VarType.List);
                                 if (variable == null) variable = data.GlobalVariables.Get(listName, CVar.VarType.List);
                                 if (variable == null) break;
@@ -442,6 +551,7 @@ namespace RuriLib
                                 break;
 
                             case ListAction.Remove:
+                                // TODO: Refactor this
                                 variable = data.Variables.Get(listName, CVar.VarType.List);
                                 if (variable == null) variable = data.GlobalVariables.Get(listName, CVar.VarType.List);
                                 if (variable == null) break;
@@ -450,15 +560,34 @@ namespace RuriLib
                                 variable.Value.RemoveAt(index);
                                 break;
 
+                            case ListAction.RemoveValues:
+                                data.Variables.Set(new CVar(variableName, list.Where(l => !Condition.Verify(new KeycheckCondition
+                                {
+                                    Left = ReplaceValues(l, data),
+                                    Comparer = ListElementComparer,
+                                    Right = ListComparisonTerm
+                                })).ToList(), isCapture));
+                                break;
+
+                            case ListAction.RemoveDuplicates:
+                                data.Variables.Set(new CVar(variableName, list.Distinct().ToList(), isCapture));
+                                break;
+
                             case ListAction.Random:
-                                data.Variables.Set(new CVar(variableName, list[data.rand.Next(list.Count)], isCapture));
+                                data.Variables.Set(new CVar(variableName, list[data.random.Next(list.Count)], isCapture));
+                                break;
+
+                            case ListAction.Shuffle:
+                                // This makes a copy of the original list
+                                var listCopy = list.ToArray().ToList();
+                                listCopy.Shuffle(data.random);
+                                data.Variables.Set(new CVar(variableName, listCopy, isCapture));
                                 break;
 
                             default:
                                 break;
                         }
-
-                        data.Log(new LogEntry(string.Format("Executed action {0} on list {1}", listAction, listName), Colors.White));
+                        data.Log(new LogEntry($"Executed action {listAction} on file {listName}", isCapture ? Colors.Tomato : Colors.Yellow));
                         break;
 
                     case UtilityGroup.Variable:
@@ -467,48 +596,113 @@ namespace RuriLib
                         {
                             case VarAction.Split:
                                 single = data.Variables.GetSingle(varName);
-                                data.Variables.Set(new CVar(variableName, single.Split(new string[] { ReplaceValues(separator, data) }, StringSplitOptions.None).ToList(), isCapture));
+                                data.Variables.Set(new CVar(variableName, single.Split(new string[] { ReplaceValues(splitSeparator, data) }, StringSplitOptions.None).ToList(), isCapture));
                                 break;
                         }
-                        data.Log(new LogEntry(string.Format("Executed action {0} on variable {1}", varAction, varName), Colors.White));
+                        data.Log(new LogEntry($"Executed action {varAction} on variable {varName}", isCapture ? Colors.Tomato : Colors.Yellow));
                         break;
 
                     case UtilityGroup.Conversion:
-                        byte[] convertedBytes = ConvertFrom(ReplaceValues(inputString, data), conversionFrom);
-                        data.Variables.Set(new CVar(variableName, ConvertTo(convertedBytes, conversionTo), isCapture));
-                        data.Log(new LogEntry(string.Format("Converted input from {0} to {1}", conversionFrom, conversionTo), Colors.White));
+                        byte[] conversionInputBytes = replacedInput.ConvertFrom(conversionFrom);
+                        var conversionResult = conversionInputBytes.ConvertTo(conversionTo);
+                        data.Variables.Set(new CVar(variableName, conversionResult, isCapture));
+                        data.Log(new LogEntry($"Executed conversion {conversionFrom} to {conversionTo} on input {replacedInput} with outcome {conversionResult}", isCapture ? Colors.Tomato : Colors.Yellow));
                         break;
 
                     case UtilityGroup.File:
                         var file = ReplaceValues(filePath, data);
-                        var input = ReplaceValues(inputString, data).Replace("\\r\\n", "\r\n").Replace("\\n", "\n");
-                        var inputs = ReplaceValuesRecursive(inputString, data);
+                        Files.ThrowIfNotInCWD(file);
+
                         switch (fileAction)
                         {
+                            case FileAction.Exists:
+                                data.Variables.Set(new CVar(variableName, File.Exists(file).ToString(), isCapture));
+                                break;
+
                             case FileAction.Read:
-                                data.Variables.Set(new CVar(variableName, File.ReadAllText(file), isCapture));
+                                lock (FileLocker.GetLock(file))
+                                    data.Variables.Set(new CVar(variableName, File.ReadAllText(file), isCapture));
                                 break;
 
                             case FileAction.ReadLines:
-                                data.Variables.Set(new CVar(variableName, File.ReadAllLines(file).ToList(), isCapture));
+                                lock (FileLocker.GetLock(file))
+                                    data.Variables.Set(new CVar(variableName, File.ReadAllLines(file).ToList(), isCapture));
                                 break;
 
                             case FileAction.Write:
-                                File.WriteAllText(file, input);
+                                Files.CreatePath(file);
+                                lock (FileLocker.GetLock(file))
+                                    File.WriteAllText(file, replacedInput.Unescape());
                                 break;
 
                             case FileAction.WriteLines:
-                                File.WriteAllLines(file, inputs);
+                                Files.CreatePath(file);
+                                lock (FileLocker.GetLock(file))
+                                    File.WriteAllLines(file, ReplaceValuesRecursive(inputString, data).Select(i => i.Unescape()));
                                 break;
 
                             case FileAction.Append:
-                                File.AppendAllText(file, input);
+                                Files.CreatePath(file);
+                                lock (FileLocker.GetLock(file))
+                                    File.AppendAllText(file, replacedInput.Unescape());
                                 break;
 
                             case FileAction.AppendLines:
-                                File.AppendAllLines(file, inputs);
+                                Files.CreatePath(file);
+                                lock (FileLocker.GetLock(file))
+                                    File.AppendAllLines(file, ReplaceValuesRecursive(inputString, data).Select(i => i.Unescape()));
+                                break;
+
+                            case FileAction.Copy:
+                                var fileCopyLocation = ReplaceValues(inputString, data);
+                                Files.ThrowIfNotInCWD(fileCopyLocation);
+                                Files.CreatePath(fileCopyLocation);
+                                lock (FileLocker.GetLock(file))
+                                    lock (FileLocker.GetLock(fileCopyLocation))
+                                        File.Copy(file, fileCopyLocation);
+                                break;
+
+                            case FileAction.Move:
+                                var fileMoveLocation = ReplaceValues(inputString, data);
+                                Files.ThrowIfNotInCWD(fileMoveLocation);
+                                Files.CreatePath(fileMoveLocation);
+                                lock (FileLocker.GetLock(file))
+                                    lock (FileLocker.GetLock(fileMoveLocation))
+                                        File.Move(file, fileMoveLocation);
+                                break;
+
+                            case FileAction.Delete:
+                                // No deletion if the file is in use (DB/OpenBullet.db cannot be deleted but instead DB/OpenBullet-BackupCopy.db)
+                                // If another process is just reading the file it will be deleted
+                                lock (FileLocker.GetLock(file))
+                                    File.Delete(file);
                                 break;
                         }
+                        data.Log(new LogEntry($"Executed action {fileAction} on file {file}", isCapture ? Colors.Tomato : Colors.Yellow));
+                        break;
+
+                    case UtilityGroup.Folder:
+                        var folder = ReplaceValues(folderPath, data);
+                        Files.ThrowIfNotInCWD(folder);
+
+                        switch (folderAction)
+                        {
+                            case FolderAction.Exists:
+                                data.Variables.Set(new CVar(variableName, Directory.Exists(folder).ToString(), isCapture));
+                                break;
+
+                            case FolderAction.Create:
+                                data.Variables.Set(new CVar(variableName, Directory.CreateDirectory(folder).ToString(), isCapture));
+                                break;
+
+                            case FolderAction.Delete:
+                                // All files in the folder will be deleted expect the ones that are in use
+                                // DB/OpenBullet.db cannot be deleted but instead DB/OpenBullet-BackupCopy.db
+                                // If another process is just reading a file in the folder it will be deleted
+                                Directory.Delete(folder, true);
+                                break;
+                        }
+                        data.Log(new LogEntry($"Executed action {folderAction} on folder {folder}", isCapture ? Colors.Tomato : Colors.Yellow));
                         break;
 
                     default:
@@ -516,66 +710,6 @@ namespace RuriLib
                 }
             }
             catch(Exception ex) { data.Log(new LogEntry(ex.Message, Colors.Tomato)); }
-        }
-
-        /// <summary>
-        /// Converts an encoded input to a byte array.
-        /// </summary>
-        /// <param name="input">The encoded input</param>
-        /// <param name="type">The encoding</param>
-        /// <returns>The converted byte array</returns>
-        public byte[] ConvertFrom(string input, Conversion type)
-        {
-            switch (type)
-            {
-                case Conversion.BASE64:
-                    return Convert.FromBase64String(input);
-
-                case Conversion.HEX:
-                    input = new string(input.ToCharArray()
-                                .Where(c => !char.IsWhiteSpace(c))
-                                .ToArray()).Replace("0x", "");
-                    return Enumerable.Range(0, input.Length)
-                     .Where(x => x % 2 == 0)
-                     .Select(x => Convert.ToByte(input.Substring(x, 2), 16))
-                     .ToArray();
-
-                case Conversion.BIN:
-                    int numOfBytes = input.Length / 8;
-                    byte[] bytes = new byte[numOfBytes];
-                    for (int i = 0; i < numOfBytes; ++i) { bytes[i] = Convert.ToByte(input.Substring(8 * i, 8), 2); }
-                    return bytes;
-
-                default:
-                    return new byte[0];
-            }
-        }
-
-        /// <summary>
-        /// Converts a byte array to an encoded string.
-        /// </summary>
-        /// <param name="input">The byte array to encode</param>
-        /// <param name="type">The encoding</param>
-        /// <returns>The encoded string</returns>
-        public string ConvertTo(byte[] input, Conversion type)
-        {
-            StringBuilder sb = new StringBuilder();
-            switch (type)
-            {
-                case Conversion.BASE64:
-                    return Convert.ToBase64String(input);
-
-                case Conversion.HEX:
-                    foreach (byte b in input)
-                        sb.AppendFormat("{0:x2}", b);
-                    return sb.ToString().ToUpper();
-
-                case Conversion.BIN:
-                    return string.Concat(input.Select(b => Convert.ToString(b, 2).PadLeft(8, '0')));
-
-                default:
-                    return "";
-            }
         }
     }
 }

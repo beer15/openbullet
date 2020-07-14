@@ -1,6 +1,9 @@
 ﻿using Extreme.Net;
+using Newtonsoft.Json;
+using RuriLib.Interfaces;
 using RuriLib.LS;
 using RuriLib.Models;
+using RuriLib.Models.Stats;
 using RuriLib.ViewModels;
 using System;
 using System.Collections.Generic;
@@ -11,6 +14,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Media;
 
 namespace RuriLib.Runner
@@ -31,7 +35,8 @@ namespace RuriLib.Runner
     /// <summary>
     /// Main class that handles all the multi-threaded checking of a Wordlist given a Config.
     /// </summary>
-    public class RunnerViewModel : ViewModelBase, IRunnerMessaging
+    // TODO: Split this into partial classes
+    public class RunnerViewModel : ViewModelBase, IRunnerMessaging, IRunner
     {
         #region Constructor
         /// <summary>
@@ -39,10 +44,12 @@ namespace RuriLib.Runner
         /// </summary>
         /// <param name="environment">The environment settings</param>
         /// <param name="settings">The RuriLib settings</param>
-        public RunnerViewModel(EnvironmentSettings environment, RLSettingsViewModel settings)
+        /// <param name="random">A reference to the global random generator</param>
+        public RunnerViewModel(EnvironmentSettings environment, RLSettingsViewModel settings, Random random = null)
         {
             Env = environment;
             Settings = settings;
+            this.random = random != null ? random : new Random();
             OnPropertyChanged("Busy");
             OnPropertyChanged("ControlsEnabled");
         }
@@ -51,6 +58,8 @@ namespace RuriLib.Runner
         #region Settings
         private RLSettingsViewModel Settings { get; set; }
         private EnvironmentSettings Env { get; set; }
+        private Random random;
+        private object randomLocker = new object();
         #endregion
 
         #region Workers
@@ -64,14 +73,14 @@ namespace RuriLib.Runner
 
         #region Visible Properties and Components
         /// <summary>Whether the Master Worker is busy or idle.</summary>
-        public bool Busy { get { return Master.Status != WorkerStatus.Idle; } }
+        public bool Busy => Master.Status != WorkerStatus.Idle;
 
         /// <summary>Whether the user can set the properties (a.k.a. whether the Master Worker is idle).</summary>
-        public bool ControlsEnabled { get { return !Busy; } }
+        public bool ControlsEnabled => !Busy;
 
-        private int botsNumber = 1;
+        private int botsAmount = 1;
         /// <summary>The amount of bots to run simultaneously for multi-threaded checking.</summary>
-        public int BotsNumber { get { return botsNumber; } set { botsNumber = value; OnPropertyChanged(); } }
+        public int BotsAmount { get => botsAmount; set { botsAmount = value; OnPropertyChanged(); } }
 
         private int startingPoint = 1;
         /// <summary>How many data lines to skip before starting the checking process.</summary>
@@ -86,7 +95,16 @@ namespace RuriLib.Runner
             get
             {
                 int ret = 0;
-                try { ret = ((TestedCount + StartingPoint - 1) * 100) / (DataPool.Size); } catch { }
+
+                try {
+                    double curr = TestedCount + StartingPoint - 1;
+                    double tot = DataPool.Size;
+                    double ratio = curr / tot;
+                    double percent = ratio * 100;
+                    ret = (int)percent;
+                }
+                catch { }
+
                 return Clamp(ret, 0, 100);
             }
         }
@@ -97,8 +115,16 @@ namespace RuriLib.Runner
         {
             get
             {
-                if (TestedCount == 0) cpm = 0;
-                if (IsCPMLocked) return cpm;
+                if (TestedCount == 0)
+                {
+                    cpm = 0;
+                    return cpm;
+                }
+
+                if (IsCPMLocked)
+                {
+                    return cpm;
+                }
 
                 try
                 {
@@ -113,13 +139,14 @@ namespace RuriLib.Runner
                 }
                 catch { }
                 finally { IsCPMLocked = false; }
+
                 return cpm;
             }
         }
 
-        private double _balance = 0;
+        private decimal _balance = 0;
         /// <summary>The remaining balance in the captcha solver account.</summary>
-        public double Balance { get { return _balance; } set { _balance = value; OnPropertyChanged("BalanceString"); } }
+        public decimal Balance { get { return _balance; } set { _balance = value; OnPropertyChanged("BalanceString"); } }
 
         /// <summary>The remaining balance in the captcha solver account preceeded by a $ sign.</summary>
         public string BalanceString { get { return $"${_balance}"; } }
@@ -129,7 +156,20 @@ namespace RuriLib.Runner
         public ProxyMode ProxyMode { get { return proxyMode; } set { proxyMode = value; OnPropertyChanged(); } }
 
         /// <summary>Whether proxies can be used for the current session given the Proxy Mode and the Config.</summary>
-        public bool UseProxies { get { return (Config.Settings.NeedsProxies && ProxyMode == ProxyMode.Default) || ProxyMode == ProxyMode.On; } }
+        public bool UseProxies 
+        { 
+            get 
+            {
+                if (Config != null)
+                {
+                    return (Config.Settings.NeedsProxies && ProxyMode == ProxyMode.Default) || ProxyMode == ProxyMode.On;
+                }
+                else
+                {
+                    return true;
+                }
+            } 
+        }
 
         /// <summary>The loaded Config to use for the check.</summary>
         public Config Config { get; private set; }
@@ -168,7 +208,20 @@ namespace RuriLib.Runner
         public DataPool DataPool { get; set; }
 
         /// <summary>The size of the DataPool.</summary>
-        public int DataSize { get { return DataPool.Size; } }
+        public int DataSize 
+        { 
+            get 
+            { 
+                if (DataPool != null)
+                {
+                    return DataPool.Size;
+                }
+                else
+                {
+                    return 0;
+                }
+            } 
+        }
         #endregion
 
         #region Bot-Shared Fields
@@ -180,6 +233,9 @@ namespace RuriLib.Runner
 
         /// <summary>The Global Cookies list that are set in all bots when they start.</summary>
         public CookieDictionary GlobalCookies { get; set; } = new CookieDictionary();
+
+        /// <summary>If not null, bots will perform this action instead of the default behaviour.</summary>
+        public Action<BotData> CustomAction { get; set; }
         #endregion
 
         #region Results
@@ -197,6 +253,9 @@ namespace RuriLib.Runner
 
         /// <summary>Auxiliary empty list.</summary>
         public ObservableCollection<ValidData> EmptyList { get; set; } = new ObservableCollection<ValidData>();
+
+        /// <summary>The collection of data that was checked with a positive outcome.</summary>
+        public IEnumerable<ValidData> Checked => (new IEnumerable<ValidData>[] { HitsList, CustomList, ToCheckList }).SelectMany(h => h).OrderBy(h => h.Time);
 
         /// <summary>Filter based on the Bot Status.</summary>
         public BotStatus ResultsFilter { get; set; } = BotStatus.SUCCESS;
@@ -219,6 +278,16 @@ namespace RuriLib.Runner
 
         /// <summary>Total amount of successfully tested data lines.</summary>
         public int TestedCount { get { return FailCount + HitCount + CustomCount + ToCheckCount; } }
+        #endregion
+
+        #region Stats
+        /// <summary>
+        /// Statistics of the checking process.
+        /// </summary>
+        public RunnerStats Stats => new RunnerStats(
+                new RunnerStatsData(TestedCount, HitCount, CustomCount, FailCount, RetryCount, ToCheckCount),
+                new RunnerStatsProxies(TotalProxiesCount, AliveProxiesCount, BannedProxiesCount, BadProxiesCount),
+                CPM, (decimal)Balance);
         #endregion
 
         #region Locks
@@ -255,6 +324,7 @@ namespace RuriLib.Runner
         {
             get
             {
+                if (Wordlist == null) return "Unknown time left";
                 var dataLeft = Wordlist.Total - StartingPoint - TestedCount;
                 if (CPM == 0) return "+inf";
                 int amountLeft = (dataLeft / CPM) * 60; // in seconds
@@ -278,8 +348,9 @@ namespace RuriLib.Runner
         public void SetConfig(Config config, bool setRecommended)
         {
             Config = config;
-            if (setRecommended) BotsNumber = Clamp(config.Settings.SuggestedBots, 1, 200);
+            if (setRecommended) BotsAmount = Clamp(config.Settings.SuggestedBots, 1, 200);
             OnPropertyChanged("ConfigName");
+            RaiseConfigChanged();
         }
 
         /// <summary>
@@ -291,6 +362,7 @@ namespace RuriLib.Runner
             Wordlist = wordlist;
             OnPropertyChanged("WordlistName");
             OnPropertyChanged("WordlistSize");
+            RaiseWordlistChanged();
         }
         #endregion
 
@@ -356,16 +428,19 @@ namespace RuriLib.Runner
         // Main job of the Master Worker
         private void Run(object sender, DoWorkEventArgs e)
         {
+            // If a custom action was defined, set a default config to avoid Null Pointer Exceptions
+            if (CustomAction != null) Config = new Config(new ConfigSettings(), "");
+
             if (Config == null) throw new Exception("No Config loaded!");
             if (Wordlist == null) throw new Exception("No Wordlist loaded!");
 
-            DataPool = new DataPool(File.ReadLines(Wordlist.Path));
+            if (!Wordlist.Temporary) DataPool = new DataPool(File.ReadLines(Wordlist.Path));
             RaiseMessageArrived(LogLevel.Info, $"Loaded {DataPool.Size} lines", false);
             RaiseMessageArrived(LogLevel.Info, $"Using Proxies: {UseProxies}", false);
 
             if (DataPool.Size == 0) throw new Exception("No data to process!");
             if (StartingPoint > DataPool.Size) throw new Exception("Illegal Starting Point!");
-            if (Config.BlocksAmount == 0) throw new Exception("The Config has zero blocks!");
+            if (CustomAction == null && Config.BlocksAmount == 0) throw new Exception("The Config has zero blocks!");
 
             // Reset the stats
             NoProxyWarningSent = false;
@@ -402,7 +477,7 @@ namespace RuriLib.Runner
             RaiseDispatchAction(new Action(() => Bots.Clear()));
 
             // Create the given amount of bots and assign them their DoWork function
-            for (int i = 1; i <= BotsNumber; i++)
+            for (int i = 1; i <= BotsAmount; i++)
             {
                 RaiseMessageArrived(LogLevel.Info, $"Creating bot {i}", false);
                 var bot = new RunnerBotViewModel(i);
@@ -415,13 +490,20 @@ namespace RuriLib.Runner
             // Checking Process
             foreach (var data in DataPool.List.Skip(StartingPoint - 1))
             {
+                // Check if there is a cancellation request
+                if (Master.CancellationPending)
+                {
+                    AbortAllBots();
+                    return;
+                }
+
                 // Create an instance of CData basing on the current data line
                 CData c = new CData(data, Env.GetWordlistType(Wordlist.Type));
 
                 // Check if it's valid
                 if (!c.IsValid || !c.RespectsRules(Config.Settings.DataRules.ToList()))
                 {
-                    FailedList.Add(new ValidData(data, "", ProxyType.Http, BotStatus.FAIL, "", "", null));
+                    FailedList.Add(new ValidData(data, "", ProxyType.Http, BotStatus.FAIL, "", "", "", null));
                     continue;
                 }
 
@@ -431,15 +513,15 @@ namespace RuriLib.Runner
                 UpdateCPM();
 
                 // If the amount of Bots was changed
-                if (BotsNumber != Bots.Count)
+                if (BotsAmount != Bots.Count)
                 {
-                    RaiseMessageArrived(LogLevel.Info, $"Bots Number was changed from {Bots.Count} to {BotsNumber}", false);
+                    RaiseMessageArrived(LogLevel.Info, $"Bots Number was changed from {Bots.Count} to {BotsAmount}", false);
 
                     // If it was increased
-                    if (BotsNumber > Bots.Count)
+                    if (BotsAmount > Bots.Count)
                     {
                         // Create the missing bots
-                        for (int b = Bots.Count + 1; b <= BotsNumber; b++)
+                        for (int b = Bots.Count + 1; b <= BotsAmount; b++)
                         {
                             RaiseMessageArrived(LogLevel.Info, $"Creating bot {b}", false);
                             try
@@ -458,7 +540,7 @@ namespace RuriLib.Runner
                     else
                     {
                         // Terminate the unnecessary bots
-                        for (int b = Bots.Count - 1; b >= BotsNumber; b--)
+                        for (int b = Bots.Count - 1; b >= BotsAmount; b--)
                         {
                             RaiseMessageArrived(LogLevel.Info, $"Removing bot {b}", false);
                             try
@@ -494,22 +576,41 @@ namespace RuriLib.Runner
                         return;
                     }
 
-                    // Write progress to DB every 2 minutes
-                    // Useful if we cannot save it upon work completion (e.g. for a crash or power outage)
-                    if (Timer.IsRunning && Timer.Elapsed.TotalSeconds != 0 && Timer.Elapsed.TotalSeconds % 120 == 0)
+                    // Periodic actions
+                    if (Timer.IsRunning && (int)Timer.Elapsed.TotalSeconds != 0)
                     {
-                        RaiseSaveProgress();
+                        // Write progress to DB every 2 minutes
+                        // Useful if we cannot save it upon work completion (e.g. for a crash or power outage)
+                        if ((int)Timer.Elapsed.TotalSeconds % 120 == 0)
+                        {
+                            RaiseSaveProgress();
+                        }
+
+                        // Reload proxies if a reload interval was set
+                        if (Settings.Proxies.ReloadInterval > 0 && (int)Timer.Elapsed.TotalSeconds % (Settings.Proxies.ReloadInterval * 60) == 0)
+                        {
+                            LoadProxies();
+                        }
                     }
 
-                    // Search for the first available bot, assign the data to it and start its job
-                    foreach (var bot in Bots)
+                    // If we are above the CPM limit, go to the wait (use cpm NOT CPM so it doesn't calculate it uselessly when it checks the IF conditions)
+                    if (Config.Settings.MaxCPM > 0 && cpm >= Config.Settings.MaxCPM)
                     {
-                        if (!bot.Worker.IsBusy)
+                        // Update the CPM and go directly to the wait (which will update the other stats too)
+                        UpdateCPM();
+                    }
+                    else
+                    {
+                        // Search for the first available bot, assign the data to it and start its job
+                        foreach (var bot in Bots)
                         {
-                            RaiseMessageArrived(LogLevel.Info, "Assigned data " + data + " to bot " + bot.Id, false);
-                            bot.Worker.RunWorkerAsync(data);
-                            assigned = true;
-                            break;
+                            if (!bot.Worker.IsBusy)
+                            {
+                                RaiseMessageArrived(LogLevel.Info, "Assigned data " + data + " to bot " + bot.Id, false);
+                                bot.Worker.RunWorkerAsync(data);
+                                assigned = true;
+                                break;
+                            }
                         }
                     }
 
@@ -538,6 +639,18 @@ namespace RuriLib.Runner
         // Executed when the Master Worker has finished its job
         private void RunCompleted(object sender, RunWorkerCompletedEventArgs e)
         {
+            if (Settings.General.SendToCheckOnAbort)
+            {
+                foreach (var bot in Bots.Where(b => b.Worker.IsBusy))
+                {
+                    ValidData validData = new ValidData(bot.Data, bot.Proxy, ProxyType.Http, BotStatus.NONE, "NONE", "", "", new List<LogEntry>());
+                    ToCheckList.Add(validData);
+                    UpdateStats();
+                    var hit = new Hit(bot.Data, new VariableList(), bot.Proxy, "NONE", ConfigName, WordlistName);
+                    RaiseFoundHit(hit);
+                }
+            }
+
             if (e.Error != null) RaiseMessageArrived(LogLevel.Error, "The Master Worker has encountered an error: " + e.Error.Message, true);
             Master.Status = WorkerStatus.Idle;
             OnPropertyChanged("Busy");
@@ -557,6 +670,7 @@ namespace RuriLib.Runner
             // Get a reference to the Worker that is executing the job and the corresponding Bot
             var senderABW = (AbortableBackgroundWorker)sender;
             var bot = Bots.First(b => b.Id == (senderABW.Id));
+            bot.Status = "INITIALIZING...";
 
             // The data line that needs to be processed
             var data = (string)e.Argument;
@@ -615,7 +729,7 @@ namespace RuriLib.Runner
                                 // If no one else issued the no more proxies warning message, issue it
                                 if (!NoProxyWarningSent)
                                 {
-                                    RaiseMessageArrived(LogLevel.Error, "No more proxies and no Unban All option selected OR the config has a max proxy use! Aborting", true);
+                                    RaiseMessageArrived(LogLevel.Error, "No more proxies and no Unban All option selected OR the config has a max proxy use! Aborting", true, 2);
                                     NoProxyWarningSent = true;
                                 }
 
@@ -628,9 +742,14 @@ namespace RuriLib.Runner
                     // Assign the proxy to the bot's displayed fields
                     bot.Proxy = currentProxy.Proxy;
                 }
+                var proxyUsedText = currentProxy == null ? "NONE" : $"{currentProxy.Proxy} ({currentProxy.Type})";
 
                 // Initialize the Bot Data
-                BotData botData = new BotData(Settings, Config.Settings, currentData, currentProxy, UseProxies, bot.Id, false);
+                BotData botData = null;
+                lock (randomLocker)
+                {
+                    botData = new BotData(Settings, Config.Settings, currentData, currentProxy, UseProxies, random, bot.Id, false);
+                }
                 botData.Driver = bot.Driver;
                 botData.BrowserOpen = bot.IsDriverOpen;
                 List<LogEntry> BotLog = new List<LogEntry>();
@@ -650,17 +769,35 @@ namespace RuriLib.Runner
                 }
                 catch { }
 
-                // Initialize the LoliScript
-                LoliScript loli = new LoliScript(Config.Script);
-                loli.Reset();
+                // Set the cloudflare cookies (to be used in normal requests) if we already have clearance and we don't have to get it each time
+                if (botData.UseProxies && botData.Proxy != null && botData.Proxy.Clearance != string.Empty && !Settings.Proxies.AlwaysGetClearance)
+                {
+                    botData.Cookies["cf_clearance"] = botData.Proxy.Clearance;
+                    botData.Cookies["__cfduid"] = botData.Proxy.Cfduid;
+                }
+
+                // Print the start message
+                BotLog.Add(new LogEntry($"===== LOG FOR BOT #{bot.Id} WITH DATA {botData.Data.Data} AND PROXY {proxyUsedText} ====={Environment.NewLine}", Colors.White));
+
+                if (CustomAction != null)
+                {
+                    RaiseMessageArrived(LogLevel.Info, $"[{bot.Id}] Executing custom action", false);
+                    try
+                    {
+                        CustomAction.Invoke(botData);
+                    }
+                    catch (Exception ex) { RaiseMessageArrived(LogLevel.Info, $"[{bot.Id}] CUSTOM ACTION EXCEPTION: {ex.ToString()}", false); throw; }
+                    goto FINISH;
+                }
 
                 /* =================
                  * SCRIPT PROCESSING *
                    ================= */
 
-                // Print the start message
-                var proxyUsedText = botData.Proxy == null ? "NONE" : $"{botData.Proxy.Proxy} ({botData.Proxy.Type})";
-                BotLog.Add(new LogEntry($"===== LOG FOR BOT #{bot.Id} WITH DATA {botData.Data.Data} AND PROXY {proxyUsedText} ====={Environment.NewLine}", Colors.White));
+                // Initialize the LoliScript
+                LoliScript loli = new LoliScript(Config.Script);
+                loli.Reset();
+
                 if (!Settings.General.EnableBotLog) BotLog.Add(new LogEntry("The Bot Logging is disabled in General Settings", Colors.Tomato));
 
                 // Open browser if Always Open
@@ -678,7 +815,7 @@ namespace RuriLib.Runner
 
                     // Output the label of the current block being processed
                     if (Settings.General.BotsDisplayMode == BotsDisplayMode.Everything)
-                        bot.Status = "<<< PROCESSING BLOCK: " + loli.CurrentBlock + " >>>";
+                        bot.Status = "<<< PROCESSING BLOCK: " + loli.NextBlock + " >>>";
 
                     // Try to take a step in the LoliScript and output any errors
                     try
@@ -688,8 +825,8 @@ namespace RuriLib.Runner
                     catch (BlockProcessingException ex)
                     {
                         if (Settings.General.BotsDisplayMode == BotsDisplayMode.Everything)
-                            bot.Status = $"<<< ERROR IN BLOCK: {loli.CurrentBlock} >>>";
-                        RaiseMessageArrived(LogLevel.Error, $"[{bot.Id}][{bot.Data}][{proxyUsedText}] ERROR in block {loli.CurrentBlock} | Exception: {ex.Message}", false);
+                            bot.Status = $"<<< ERROR IN BLOCK: {loli.NextBlock} >>>";
+                        RaiseMessageArrived(LogLevel.Error, $"[{bot.Id}][{bot.Data}][{proxyUsedText}] ERROR in block {loli.NextBlock} | Exception: {ex.Message}", false);
                         Thread.Sleep(1000);
                     }
                     catch (Exception ex)
@@ -709,6 +846,8 @@ namespace RuriLib.Runner
                 }
                 while (loli.CanProceed); // Do this while the LoliScript has stuff to process
 
+                FINISH:
+
                 // Print the end message
                 BotLog.Add(new LogEntry($"===== BOT TERMINATED WITH RESULT: {botData.StatusString} =====", Colors.White));
                 if (Settings.General.BotsDisplayMode != BotsDisplayMode.None)
@@ -717,7 +856,7 @@ namespace RuriLib.Runner
                 RaiseMessageArrived(LogLevel.Info, $"[{bot.Id}][{bot.Data}][{proxyUsedText}] Ended with result {botData.StatusString}", false);
 
                 // Quit Browser if Always Quit
-                if (Config.Settings.AlwaysQuit)
+                if (Config.Settings.AlwaysQuit || (Config.Settings.QuitOnBanRetry && (botData.Status == BotStatus.BAN || botData.Status == BotStatus.RETRY)))
                     try { botData.Driver.Quit(); botData.BrowserOpen = false; } catch { }
 
                 // Save Browser Status
@@ -755,9 +894,9 @@ namespace RuriLib.Runner
                 switch (botData.Status)
                 {
                     case BotStatus.SUCCESS:
-                        validData = new ValidData(botData.Data.Data, botData.Proxy == null ? "" : botData.Proxy.Proxy, botData.Proxy == null ? ProxyType.Http : botData.Proxy.Type, botData.Status, capturedData.ToCaptureString(), Settings.General.SaveLastSource ? botData.ResponseSource : "", BotLog);
+                        validData = new ValidData(botData.Data.Data, botData.Proxy == null ? "" : botData.Proxy.Proxy, botData.Proxy == null ? ProxyType.Http : botData.Proxy.Type, botData.Status, "HIT", capturedData.ToCaptureString(), Settings.General.SaveLastSource ? botData.ResponseSource : "", BotLog);
                         RaiseDispatchAction(new Action(() => HitsList.Add(validData)));
-                        if (UseProxies && !Settings.Proxies.NeverBan && Settings.Proxies.BanAfterGoodStatus)
+                        if (UseProxies && !Settings.Proxies.NeverBan && Config.Settings.BanProxyAfterGoodStatus)
                         {
                             currentProxy.Status = Status.BANNED;
                             currentProxy.LastUsed = DateTime.Now;
@@ -767,15 +906,15 @@ namespace RuriLib.Runner
                         break;
 
                     case BotStatus.FAIL:
-                        FailedList.Add(new ValidData("", "", ProxyType.Http, botData.Status, "", "", null)); // Only needed for CPM calculation so we can set blank data to avoid filling RAM
+                        FailedList.Add(new ValidData("", "", ProxyType.Http, botData.Status, "", "", "", null)); // Only needed for CPM calculation so we can set blank data to avoid filling RAM
                         break;
 
                     case BotStatus.CUSTOM:
                         hitType = botData.CustomStatus;
-                        validData = new ValidData(botData.Data.Data, botData.Proxy == null ? "" : botData.Proxy.Proxy, botData.Proxy == null ? ProxyType.Http : botData.Proxy.Type, botData.Status, capturedData.ToCaptureString(), Settings.General.SaveLastSource ? botData.ResponseSource : "", BotLog);
+                        validData = new ValidData(botData.Data.Data, botData.Proxy == null ? "" : botData.Proxy.Proxy, botData.Proxy == null ? ProxyType.Http : botData.Proxy.Type, botData.Status, hitType, capturedData.ToCaptureString(), Settings.General.SaveLastSource ? botData.ResponseSource : "", BotLog);
                         RaiseDispatchAction(new Action(() => CustomList.Add(validData)));
 
-                        if (UseProxies && !Settings.Proxies.NeverBan && Settings.Proxies.BanAfterGoodStatus)
+                        if (UseProxies && !Settings.Proxies.NeverBan && Config.Settings.BanProxyAfterGoodStatus)
                         {
                             currentProxy.Status = Status.BANNED;
                             currentProxy.LastUsed = DateTime.Now;
@@ -784,6 +923,7 @@ namespace RuriLib.Runner
                         break;
 
                     case BotStatus.BAN:
+                        // If the NeverBan option is true or we don't use a proxy, the BAN gets treated as a RETRY
                         if (UseProxies && !Settings.Proxies.NeverBan)
                         {
                             currentProxy.Status = Status.BANNED;
@@ -791,8 +931,18 @@ namespace RuriLib.Runner
                             RetryCount++;
                         }
 
-                        // If the NeverBan option is true or we don't use a proxy, the BAN gets treated as a RETRY
-                        goto GETPROXY;
+                        if (ShouldTriggerEvasion(currentData.Retries))
+                        {
+                            currentData.Retries++;
+                            goto GETPROXY;
+                        }
+                        else
+                        {
+                            RaiseMessageArrived(LogLevel.Warning, $"[{bot.Id}][{bot.Data}] Maximum retries exceeded");
+                            botData.Status = BotStatus.NONE;
+                            hitType = botData.Status.ToString();
+                            goto TOCHECK;
+                        }
 
                     case BotStatus.ERROR: // We assume it's a proxy error and that the Config is working correctly, so we mark the proxy as bad
                         RetryCount++;
@@ -804,10 +954,11 @@ namespace RuriLib.Runner
                         goto GETPROXY;
 
                     case BotStatus.NONE:
-                        validData = new ValidData(botData.Data.Data, botData.Proxy == null ? "" : botData.Proxy.Proxy, botData.Proxy == null ? ProxyType.Http : botData.Proxy.Type, botData.Status, capturedData.ToCaptureString(), Settings.General.SaveLastSource ? botData.ResponseSource : "", BotLog);
+                        TOCHECK:
+                        validData = new ValidData(botData.Data.Data, botData.Proxy == null ? "" : botData.Proxy.Proxy, botData.Proxy == null ? ProxyType.Http : botData.Proxy.Type, botData.Status, "TOCHK", capturedData.ToCaptureString(), Settings.General.SaveLastSource ? botData.ResponseSource : "", BotLog);
                         RaiseDispatchAction(new Action(() => ToCheckList.Add(validData)));
 
-                        if (UseProxies && !Settings.Proxies.NeverBan && Settings.Proxies.BanAfterGoodStatus)
+                        if (UseProxies && !Settings.Proxies.NeverBan && Config.Settings.BanProxyAfterGoodStatus)
                         {
                             currentProxy.Status = Status.BANNED;
                             currentProxy.LastUsed = DateTime.Now;
@@ -819,8 +970,24 @@ namespace RuriLib.Runner
                 // Add it to the List and to the Database as well
                 if (validData != null)
                 {
-                    var hit = new Hit(data, capturedData, currentProxy == null ? "" : currentProxy.Proxy, hitType, ConfigName, WordlistName);
+                    var hit = new Hit(botData.Data.Data, capturedData, currentProxy == null ? "" : currentProxy.Proxy, hitType, ConfigName, WordlistName);
                     RaiseFoundHit(hit);
+                }
+
+                // Call the webhook
+                if (Settings.General.WebhookEnabled && (botData.Status == BotStatus.SUCCESS || botData.Status == BotStatus.CUSTOM))
+                {
+                    HttpRequest request = new HttpRequest();
+                    try
+                    {
+                        var toSend = new WebhookFormat(data, hitType, capturedData.ToCaptureString(), DateTime.Now, Config.Settings.Name, Config.Settings.Author, Settings.General.WebhookUser);
+                        var json = JsonConvert.SerializeObject(toSend);
+                        request.PostAsync(Settings.General.WebhookURL, json, "application/json");
+                    }
+                    catch
+                    {
+                        RaiseMessageArrived(LogLevel.Error, $"Could not register the hit to webhook {Settings.General.WebhookURL}");
+                    }
                 }
 
                 // Wait time
@@ -887,45 +1054,37 @@ namespace RuriLib.Runner
         }
         #endregion
 
-        #region Interface Calls
-        /// <summary>
-        /// Fired when a new message needs to be logged.
-        /// </summary>
-        public event Action<IRunnerMessaging, LogLevel, string, bool> MessageArrived;
+        #region Events
+        /// <summary>Fired when a new message needs to be logged.</summary>
+        public event Action<IRunnerMessaging, LogLevel, string, bool, int> MessageArrived;
 
-        /// <summary>
-        /// Fired when the Master Worker status changed.
-        /// </summary>
+        /// <summary>Fired when the Master Worker status changed.</summary>
         public event Action<IRunnerMessaging> WorkerStatusChanged;
 
-        /// <summary>
-        /// Fired when a Hit was found.
-        /// </summary>
+        /// <summary>Fired when a Hit was found.</summary>
         public event Action<IRunnerMessaging, Hit> FoundHit;
 
-        /// <summary>
-        /// Fired when proxies need to be reloaded.
-        /// </summary>
+        /// <summary>Fired when proxies need to be reloaded.</summary>
         public event Action<IRunnerMessaging> ReloadProxies;
 
-        /// <summary>
-        /// Fired when an Action could change the UI and needs to be dispatched to another thread (usually it's handled by the UI thread).
-        /// </summary>
+        /// <summary>/// Fired when an Action could change the UI and needs to be dispatched to another thread (usually it's handled by the UI thread).</summary>
         public event Action<IRunnerMessaging, Action> DispatchAction;
 
-        /// <summary>
-        /// Fired when the progress record needs to be saved to the Database.
-        /// </summary>
+        /// <summary>Fired when the progress record needs to be saved to the Database.</summary>
         public event Action<IRunnerMessaging> SaveProgress;
 
-        /// <summary>
-        /// Fired when custom inputs from the user are required.
-        /// </summary>
+        /// <summary>Fired when custom inputs from the user are required.</summary>
         public event Action<IRunnerMessaging> AskCustomInputs;
 
-        private void RaiseMessageArrived(LogLevel level, string message, bool prompt)
+        /// <summary>Fired when the currently selected Config changed.</summary>
+        public event Action<IRunnerMessaging> ConfigChanged;
+        
+        /// <summary>Fired when the currently selected Wordlist changed.</summary>
+        public event Action<IRunnerMessaging> WordlistChanged;
+
+        private void RaiseMessageArrived(LogLevel level, string message, bool prompt = false, int timeout = 0)
         {
-            MessageArrived?.Invoke(this, level, message, prompt);
+            MessageArrived?.Invoke(this, level, message, prompt, timeout);
         }
 
         private void RaiseWorkerStatusChanged()
@@ -958,6 +1117,16 @@ namespace RuriLib.Runner
         {
             AskCustomInputs?.Invoke(this);
         }
+
+        private void RaiseConfigChanged()
+        {
+            ConfigChanged?.Invoke(this);
+        }
+
+        private void RaiseWordlistChanged()
+        {
+            WordlistChanged?.Invoke(this);
+        }
         #endregion
 
         #region Proxy Management Methods
@@ -977,15 +1146,18 @@ namespace RuriLib.Runner
                     Thread.Sleep(100);
                     break;
 
-                case ProxyReloadSource.API:
-                    try
+                case ProxyReloadSource.Remote:
+                    List<CProxy> proxies = new List<CProxy>();
+                    Parallel.ForEach(Settings.Proxies.RemoteProxySources.Where(s => s.Active), s =>
                     {
-                        ProxyPool = new ProxyPool(
-                            GetProxiesFromAPI(Settings.Proxies.ReloadPath,
-                                                Settings.Proxies.ReloadType,
-                                                Settings.Proxies.ParseWithIPRegex), Settings.Proxies.ShuffleOnStart);
-                    }
-                    catch (Exception ex) { RaiseMessageArrived(LogLevel.Error, $"Could not contact the reload API - {ex.Message}", true); }
+                        try
+                        {
+                            proxies.AddRange(GetProxiesFromRemoteSource(s.Url, s.Type, s.Pattern, s.Output));
+                        }
+                        catch (Exception ex) { RaiseMessageArrived(LogLevel.Error, $"Could not contact the reload API {s.Url} for {s.Type} proxies - {ex.Message}", true, 5); }
+                    });
+                    ProxyPool = new ProxyPool(proxies, Settings.Proxies.ShuffleOnStart);
+                    // ProxyPool.RemoveDuplicates();
                     break;
 
                 case ProxyReloadSource.File:
@@ -993,10 +1165,10 @@ namespace RuriLib.Runner
                     {
                         ProxyPool = new ProxyPool(
                             GetProxiesFromFile(Settings.Proxies.ReloadPath,
-                                                Settings.Proxies.ReloadType,
-                                                Settings.Proxies.ParseWithIPRegex), Settings.Proxies.ShuffleOnStart);
+                                                Settings.Proxies.ReloadType), Settings.Proxies.ShuffleOnStart);
+                        // ProxyPool.RemoveDuplicates();
                     }
-                    catch (Exception ex) { RaiseMessageArrived(LogLevel.Error, $"Could not read the proxies from file - {ex.Message}", true); }
+                    catch (Exception ex) { RaiseMessageArrived(LogLevel.Error, $"Could not read the proxies from file {Settings.Proxies.ReloadPath} - {ex.Message}", true); }
                     break;
             }
 
@@ -1004,34 +1176,82 @@ namespace RuriLib.Runner
         }
 
         /// <summary>
-        /// Loads a list of proxies from an API endpoint.
+        /// Loads a list of proxies from a remote source.
         /// </summary>
-        /// <param name="url">The URL of the API call</param>
+        /// <param name="url">The URL of the remote source</param>
         /// <param name="type">The type of the proxies</param>
-        /// <param name="useRegex">Whether to use an IP:PORT regex to extract the proxies from the lines</param>
+        /// <param name="pattern">The Regex pattern to be used for parsing the proxies</param>
+        /// <param name="output">The output format of the groups matched by the regex</param>
         /// <returns>The list of CProxy objects loaded from the API</returns>
-        public static List<CProxy> GetProxiesFromAPI(string url, ProxyType type, bool useRegex = false)
+        public static List<CProxy> GetProxiesFromRemoteSource(string url, ProxyType type, string pattern, string output)
         {
             var proxies = new List<CProxy>();
 
             HttpRequest req = new HttpRequest();
+            req.ConnectTimeout = 5000;
+            req.ReadWriteTimeout = 5000;
             req.UserAgent = "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/65.0.3325.181 Safari/537.36 OPR/52.0.2871.64";
             var resp = req.Get(url).ToString();
-            if (useRegex)
+
+            try
             {
-                var pattern = "(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5]):[0-9]+";
                 var matches = Regex.Matches(resp, pattern);
-                foreach (Match m in matches)
-                    proxies.Add(new CProxy(m.Value, type));
+                foreach (Match match in matches)
+                {
+                    var result = output;
+                    for (var i = 0; i < match.Groups.Count; i++) result = result.Replace("[" + i + "]", match.Groups[i].Value);
+                    proxies.Add(new CProxy(result, type));
+                }
             }
-            else
-            {
-                proxies.AddRange(resp
-                    .Split(new string[] { "\r\n", "\r", "\n" }, StringSplitOptions.RemoveEmptyEntries)
-                    .Select(p => new CProxy(p.Trim(), type)));
-            }
+            catch { }
 
             return proxies;
+        }
+
+        /// <summary>
+        /// Loads a list of proxies from a remote source asynchronously.
+        /// </summary>
+        /// <param name="url">The URL of the remote source</param>
+        /// <param name="type">The type of the proxies</param>
+        /// <param name="pattern">The Regex pattern to be used for parsing the proxies</param>
+        /// <param name="output">The output format of the groups matched by the regex</param>
+        /// <returns>The list of CProxy objects loaded from the API</returns>
+        public async static Task<RemoteProxySourceResult> GetProxiesFromRemoteSourceAsync(string url, ProxyType type, string pattern, string output)
+        {
+            var proxies = new List<CProxy>();
+
+            try
+            {
+                HttpRequest req = new HttpRequest();
+                req.UserAgent = "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/65.0.3325.181 Safari/537.36 OPR/52.0.2871.64";
+                var resp = (await req.GetAsync(url)).ToString();
+
+                var matches = Regex.Matches(resp, pattern);
+                foreach (Match match in matches)
+                {
+                    var result = output;
+                    for (var i = 0; i < match.Groups.Count; i++) result = result.Replace("[" + i + "]", match.Groups[i].Value);
+                    proxies.Add(new CProxy(result, type));
+                }
+            }
+            catch (Exception ex)
+            {
+                return new RemoteProxySourceResult()
+                {
+                    Successful = false,
+                    Error = ex.Message,
+                    Url = url,
+                    Proxies = new List<CProxy>()
+                };
+            }
+
+            return new RemoteProxySourceResult()
+            {
+                Successful = true,
+                Error = "",
+                Url = url,
+                Proxies = proxies
+            };
         }
 
         /// <summary>
@@ -1039,29 +1259,24 @@ namespace RuriLib.Runner
         /// </summary>
         /// <param name="fileName">The file containing the proxies, one per line</param>
         /// <param name="type">The type of the proxies</param>
-        /// <param name="useRegex">Whether to use an IP:PORT regex to extract the proxies from the lines</param>
         /// <returns>The list of CProxy objects loaded from the file</returns>
-        public static List<CProxy> GetProxiesFromFile(string fileName, ProxyType type, bool useRegex = false)
+        public static List<CProxy> GetProxiesFromFile(string fileName, ProxyType type)
         {
             var lines = File.ReadAllLines(fileName);
             var proxies = new List<CProxy>();
 
-            if (useRegex)
-            {
-                var pattern = "(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5]):[0-9]+";
-                foreach(var line in lines)
-                {
-                    var match = Regex.Match(line, pattern);
-                    if (match.Success)
-                        proxies.Add(new CProxy(match.Value, type));
-                }
-            }
-            else
-            {
-                proxies.AddRange(lines.Select(l => new CProxy(l, type)));
-            }
+            proxies.AddRange(lines.Select(l => new CProxy(l, type)));
 
             return proxies;
+        }
+
+        private bool ShouldTriggerEvasion(int retries)
+        {
+            var evasionValue = Config.Settings.BanLoopEvasionOverride == -1 
+                ? Settings.Proxies.BanLoopEvasion 
+                : Config.Settings.BanLoopEvasionOverride;
+            
+            return retries < evasionValue || evasionValue == 0;
         }
         #endregion
 

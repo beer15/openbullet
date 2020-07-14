@@ -1,4 +1,4 @@
-﻿using RuriLib.CaptchaServices;
+﻿using RuriLib.Functions.Captchas;
 using RuriLib.LS;
 using RuriLib.Models;
 using System;
@@ -9,6 +9,7 @@ namespace RuriLib
     /// <summary>
     /// A block that solves a reCaptcha challenge.
     /// </summary>
+    [Obsolete]
     public class BlockRecaptcha : BlockCaptcha
     {
         private string variableName = "";
@@ -49,7 +50,7 @@ namespace RuriLib
             Url = LineParser.ParseLiteral(ref input, "URL");
             SiteKey = LineParser.ParseLiteral(ref input, "SITEKEY");
 
-            if (LineParser.ParseToken(ref input, TokenType.Arrow, false) == "")
+            if (LineParser.ParseToken(ref input, TokenType.Arrow, false) == string.Empty)
                 return this;
 
             LineParser.EnsureIdentifier(ref input, "VAR");
@@ -81,52 +82,21 @@ namespace RuriLib
             if(!data.GlobalSettings.Captchas.BypassBalanceCheck)
                 base.Process(data);
 
+            data.Log(new LogEntry("WARNING! This block is obsolete and WILL BE REMOVED IN THE FUTURE! Use the SOLVECAPTCHA block!", Colors.Tomato));
             data.Log(new LogEntry("Solving reCaptcha...", Colors.White));
 
             string recapResponse = "";
-            CaptchaServices.CaptchaService service = null;
-
-            switch (data.GlobalSettings.Captchas.CurrentService)
+            try
             {
-                case CaptchaService.ImageTypers:
-                    service = new ImageTyperz(data.GlobalSettings.Captchas.ImageTypToken, data.GlobalSettings.Captchas.Timeout);
-                    break;
-
-                case CaptchaService.AntiCaptcha:
-                    service = new AntiCaptcha(data.GlobalSettings.Captchas.AntiCapToken, data.GlobalSettings.Captchas.Timeout);
-                    break;
-
-                case CaptchaService.DBC:
-                    service = new DeathByCaptcha(data.GlobalSettings.Captchas.DBCUser, data.GlobalSettings.Captchas.DBCPass, data.GlobalSettings.Captchas.Timeout);
-                    break;
-
-                case CaptchaService.TwoCaptcha:
-                    service = new TwoCaptcha(data.GlobalSettings.Captchas.TwoCapToken, data.GlobalSettings.Captchas.Timeout);
-                    break;
-
-                case CaptchaService.DeCaptcher:
-                    service = new DeCaptcher(data.GlobalSettings.Captchas.DCUser, data.GlobalSettings.Captchas.DCPass, data.GlobalSettings.Captchas.Timeout);
-                    break;
-
-                case CaptchaService.AZCaptcha:
-                    service = new AZCaptcha(data.GlobalSettings.Captchas.AZCapToken, data.GlobalSettings.Captchas.Timeout);
-                    break;
-
-                case CaptchaService.SolveRecaptcha:
-                    service = new SolveReCaptcha(data.GlobalSettings.Captchas.SRUserId, data.GlobalSettings.Captchas.SRToken, data.GlobalSettings.Captchas.Timeout);
-                    break;
-
-                case CaptchaService.CaptchasIO:
-                    service = new CaptchasIO(data.GlobalSettings.Captchas.CIOToken, data.GlobalSettings.Captchas.Timeout);
-                    break;
-
-                default:
-                    throw new Exception("This service cannot solve reCaptchas!");
+                recapResponse = Captchas.GetService(data.GlobalSettings.Captchas)
+                    .SolveRecaptchaV2Async(ReplaceValues(siteKey, data), ReplaceValues(url, data)).Result.Response;
             }
-            recapResponse = service.SolveRecaptcha(siteKey, ReplaceValues(url, data));
+            catch
+            {
+                data.Log(recapResponse == string.Empty ? new LogEntry("Couldn't get a reCaptcha response from the service", Colors.Tomato) : new LogEntry("Succesfully got the response: " + recapResponse, Colors.GreenYellow));
+            }
 
-            data.Log(recapResponse == "" ? new LogEntry("Couldn't get a reCaptcha response from the service", Colors.Tomato) : new LogEntry("Succesfully got the response: " + recapResponse, Colors.GreenYellow));
-            if (VariableName != "")
+            if (VariableName != string.Empty)
             {
                 data.Log(new LogEntry("Response stored in variable: " + variableName, Colors.White));
                 data.Variables.Set(new CVar(variableName, recapResponse));

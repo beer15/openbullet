@@ -1,18 +1,20 @@
-﻿using Extreme.Net;
-using RuriLib.CaptchaServices;
-using RuriLib.LS;
+﻿using RuriLib.LS;
 using RuriLib.Models;
 using System;
 using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Windows.Media;
+using RuriLib.Functions.Download;
+using System.Collections.Generic;
+using RuriLib.Functions.Captchas;
 
 namespace RuriLib
 {
     /// <summary>
     /// A block that solves an image captcha challenge.
     /// </summary>
+    [Obsolete]
     public class BlockImageCaptcha : BlockCaptcha
     {
         private string url = "";
@@ -30,6 +32,10 @@ namespace RuriLib
         private bool sendScreenshot = false;
         /// <summary>Whether the captcha image needs to be taken by the last screenshot taken by selenium.</summary>
         public bool SendScreenshot { get { return sendScreenshot; } set { sendScreenshot = value; OnPropertyChanged(); } }
+
+        private string userAgent = "";
+        /// <summary>The user agent to use in the image download request.</summary>
+        public string UserAgent { get { return userAgent; } set { userAgent = value; OnPropertyChanged(); } }
 
         /// <summary>
         /// Creates an Image Captcha block.
@@ -56,6 +62,11 @@ namespace RuriLib
 
             Url = LineParser.ParseLiteral(ref input, "URL");
 
+            if (LineParser.Lookahead(ref input) == TokenType.Literal)
+            {
+                UserAgent = LineParser.ParseLiteral(ref input, "UserAgent");
+            }
+
             while (LineParser.Lookahead(ref input) == TokenType.Boolean)
                 LineParser.SetBool(ref input, this);
 
@@ -75,12 +86,16 @@ namespace RuriLib
             writer
                 .Label(Label)
                 .Token("CAPTCHA")
-                .Literal(Url)
-                .Boolean(Base64, "Base64")
+                .Literal(Url);
+
+            if (UserAgent != string.Empty) writer.Literal(UserAgent);
+
+            writer.Boolean(Base64, "Base64")
                 .Boolean(SendScreenshot, "SendScreenshot")
                 .Arrow()
                 .Token("VAR")
                 .Literal(VariableName);
+
             return writer.ToString();
         }
 
@@ -92,6 +107,7 @@ namespace RuriLib
 
             var localUrl = ReplaceValues(url, data);
 
+            data.Log(new LogEntry("WARNING! This block is obsolete and WILL BE REMOVED IN THE FUTURE! Use the SOLVECAPTCHA block!", Colors.Tomato));
             data.Log(new LogEntry("Downloading image...", Colors.White));
 
             // Download captcha
@@ -114,103 +130,35 @@ namespace RuriLib
             {
                 try
                 {
-                    DownloadRemoteImageFile(captchaFile, data, localUrl);
+                    Download.RemoteFile(captchaFile, localUrl,
+                        data.UseProxies, data.Proxy, data.Cookies, out Dictionary<string, string> newCookies,
+                        data.GlobalSettings.General.RequestTimeout * 1000, ReplaceValues(UserAgent, data));
+                    data.Cookies = newCookies;
                 }
                 catch (Exception ex) { data.Log(new LogEntry(ex.Message, Colors.Tomato)); throw; }
             }
 
             string response = "";
-            CaptchaServices.CaptchaService service = null;
+            
             var bitmap = new Bitmap(captchaFile);
             try
             {
-                switch (data.GlobalSettings.Captchas.CurrentService)
-                {
-                    case CaptchaService.ImageTypers:
-                        service = new ImageTyperz(data.GlobalSettings.Captchas.ImageTypToken, data.GlobalSettings.Captchas.Timeout);
-                        break;
+                var converter = new ImageConverter();
+                var bytes = (byte[])converter.ConvertTo(bitmap, typeof(byte[]));
 
-                    case CaptchaService.AntiCaptcha:
-                        service = new AntiCaptcha(data.GlobalSettings.Captchas.AntiCapToken, data.GlobalSettings.Captchas.Timeout);
-                        break;
-
-                    case CaptchaService.DBC:
-                        service = new DeathByCaptcha(data.GlobalSettings.Captchas.DBCUser, data.GlobalSettings.Captchas.DBCPass, data.GlobalSettings.Captchas.Timeout);
-                        break;
-
-                    case CaptchaService.TwoCaptcha:
-                        service = new TwoCaptcha(data.GlobalSettings.Captchas.TwoCapToken, data.GlobalSettings.Captchas.Timeout);
-                        break;
-
-                    case CaptchaService.DeCaptcher:
-                        service = new DeCaptcher(data.GlobalSettings.Captchas.DCUser, data.GlobalSettings.Captchas.DCPass, data.GlobalSettings.Captchas.Timeout);
-                        break;
-
-                    case CaptchaService.AZCaptcha:
-                        service = new AZCaptcha(data.GlobalSettings.Captchas.AZCapToken, data.GlobalSettings.Captchas.Timeout);
-                        break;
-
-                    case CaptchaService.CaptchasIO:
-                        service = new CaptchasIO(data.GlobalSettings.Captchas.CIOToken, data.GlobalSettings.Captchas.Timeout);
-                        break;
-
-                    default:
-                        throw new Exception("This service cannot solve normal captchas!");
-                }
-                response = service.SolveCaptcha(bitmap);
+                response = Captchas.GetService(data.GlobalSettings.Captchas)
+                    .SolveImageCaptchaAsync(Convert.ToBase64String(bytes)).Result.Response;
             }
             catch(Exception ex) { data.Log(new LogEntry(ex.Message, Colors.Tomato)); throw; }
             finally { bitmap.Dispose(); }
 
-            data.CaptchaService = service;
-            data.Log(response == "" ? new LogEntry("Couldn't get a response from the service", Colors.Tomato) : new LogEntry("Succesfully got the response: " + response, Colors.GreenYellow));
+            data.Log(response == string.Empty ? new LogEntry("Couldn't get a response from the service", Colors.Tomato) : new LogEntry("Succesfully got the response: " + response, Colors.GreenYellow));
 
-            if (VariableName != "")
+            if (VariableName != string.Empty)
             {
                 data.Log(new LogEntry("Response stored in variable: " + variableName, Colors.White));
                 data.Variables.Set(new CVar(variableName, response));
             }
-        }
-
-        private void DownloadRemoteImageFile(string fileName, BotData data, string localUrl)
-        {
-            HttpRequest request = new HttpRequest();
-
-            request.Cookies = new CookieDictionary();
-            foreach (var cookie in data.Cookies)
-                request.Cookies.Add(cookie.Key, cookie.Value);
-
-            // Set proxy
-            if (data.UseProxies)
-            {
-                request.Proxy = data.Proxy.GetClient();
-
-                var timeout = data.GlobalSettings.General.RequestTimeout * 1000;
-                try
-                {
-                    request.Proxy.ReadWriteTimeout = timeout;
-                    request.Proxy.ConnectTimeout = timeout;
-                    request.Proxy.Username = data.Proxy.Username;
-                    request.Proxy.Password = data.Proxy.Password;
-                }
-                catch { }
-            }
-
-            HttpResponse response = request.Get(localUrl);
-            
-            using (Stream inputStream = response.ToMemoryStream())
-            using (Stream outputStream = File.OpenWrite(fileName))
-            {
-                byte[] buffer = new byte[4096];
-                int bytesRead;
-                do
-                {
-                    bytesRead = inputStream.Read(buffer, 0, buffer.Length);
-                    outputStream.Write(buffer, 0, bytesRead);
-                } while (bytesRead != 0);
-            }
-
-            data.Cookies = response.Cookies;
         }
     }
 }

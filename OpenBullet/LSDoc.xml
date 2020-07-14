@@ -171,39 +171,39 @@ ELEMENT LOCATOR "STRING" [INDEX]
 
 Allowed Actions:
 ## Spawn a div with a given id to a (x,y) absolute position, so you can use it as element hook for mouse movement
-SPAWN "ID" X Y
+SPAWN "ID" "X" "Y"
 CLICK [ELEMENT]
 CLICKANDHOLD [ELEMENT]
 RIGHTCLICK [ELEMENT]
 DOUBLECLICK [ELEMENT]
 DRAGANDDROP ELEMENT -> ELEMENT
-DRAGANDDROPWITHOFFSET X Y ELEMENT
+DRAGANDDROPWITHOFFSET "X" "Y" ELEMENT
 KEYDOWN "KEY" [ELEMENT]
 KEYUP "KEY" [ELEMENT]
-MOVEBY X Y
+MOVEBY "X" "Y"
 MOVETO ELEMENT
 RELEASE [ELEMENT]
 SENDKEYS "KEYS" [ELEMENT]
 ## Draws random points in a square starting from the top left corner and with the given width and height
 DRAWPOINTS MAXW MAXH AMOUNT
-DRAWLINE (X1 Y2 -> X2 Y2 / ELEMENT -> ELEMENT) : AMOUNT
-DRAWLINEHUMAN (X1 Y1 -> X2 Y2 / ELEMENT -> ELEMENT) : AMOUNT [GRAVITY WIND]
+DRAWLINE ("X1" "Y1" -> "X2" "Y2" / ELEMENT -> ELEMENT) : AMOUNT
+DRAWLINEHUMAN ("X1" "Y1" -> "X2" "Y2" / ELEMENT -> ELEMENT) : AMOUNT [GRAVITY WIND]
 
 Examples:
 ## Moving to an element and clicking 100 pixels right of it
 MOUSEACTION
   MOVETO ELEMENT CLASS "testclass" 1
-  MOVEBY 100 0
+  MOVEBY "100" "0"
   CLICK
 
 ## Moving to a specific set of coordinates on the page
 MOUSEACTION
-  SPAWN "target" 100 150
+  SPAWN "target" "100" "150"
   MOVETO ELEMENT ID "target"
   
 ## Moving like a human from point A (0,0) to point B (700,700). The lower the AMOUNT, the faster the line is drawn
 MOUSEACTION
-  DRAWLINEHUMAN 0 0 -> 700 700 : 150 1 1
+  DRAWLINEHUMAN "0" "0" -> "700" "700" : 150 1 1
 
 ## Moving like a human from element with id="one" to element with id="two", 20 points and default gravity/wind
 MOUSEACTION
@@ -231,18 +231,20 @@ FUNCTION ClearCookies
 
 Peculiar functions:
 FUNCTION Hash SHA512 "&lt;PASS&gt;" -> VAR "HASHED"
-FUNCTION HMAC SHA1 "key" HmacBase64=True "&lt;PASS&gt;" -> VAR "DIGEST"
+FUNCTION HMAC SHA1 "key" HmacBase64=True KeyBase64=False "&lt;PASS&gt;" -> VAR "DIGEST"
 FUNCTION Translate StopAfterFirstMatch=True
   KEY "key1" VALUE "value1"
   KEY "key2" VALUE "value2"
   "input" -> CAP "Translated"
 FUNCTION DateToUnixTime "format" "input" -> VAR "DATE"
+FUNCTION UnixTimeToDate "format" "input" -> VAR "UNIXTIME"
 FUNCTION Replace "what" "with" UseRegex=True "input" -> VAR "REPLACED"
 FUNCTION RegexMatch "pattern" "input" -> VAR "MATCHED"
-FUNCTION RandomNum 0 100 -> VAR "RANDOM"
+FUNCTION RandomNum "0" "100" -> VAR "RANDOM"
 FUNCTION CountOccurrences "tofind" "input" -> VAR "COUNT"
 FUNCTION CharAt "index" "input" -> VAR "CHAR"
 FUNCTION Substring "startindex" "length" "input" -> VAR "SUBSTRING"
+FUNCTION AesEncrypt "secretkey" "secretmessage" -> VAR "ENCRYPTED"
     </item>
     <item name="Keycheck">
 This will spawn and execute a Keycheck Block.
@@ -271,16 +273,17 @@ KEYCHECK BanOnToCheck=False
 This will spawn and execute a Request Block.
 
 Syntax (expanded for readability):
-REQUEST METHOD "URL" [AutoRedirect?] [ReadResponseSource?]
+REQUEST METHOD "URL" [AcceptEncoding?] [AutoRedirect?] [ReadResponseSource?] [ParseQuery?] [EncodeContent?]
   [STANDARD / MULTIPART / BASICAUTH]
   [CONTENT "postdata"]
   [CONTENTTYPE "ctype"]
-  [STRINGCONTENT "name: value"]*
-  [FILECONTENT "name: path"]*
+  [STRINGCONTENT "name:value"]*
+  [FILECONTENT "name:path:content-type"]*
   [BOUNDARY "abcd"]
   [COOKIE "abc: def"]*
   [HEADER "abc: def"]*
-  [-> STRING / -> FILE "path"]
+  [SECPROTO security-protocol]
+  [-> STRING / -> FILE "path" / -> BASE64 "VARNAME"]
   
 Examples:
 REQUEST GET "http://example.com/file.zip" -> FILE "file.zip"
@@ -299,7 +302,38 @@ REQUEST POST "http://example.com/multi" MULTIPART
   
 REQUEST GET "http://example.com/basic" BASICAUTH
     </item>
-    <item name="Recaptcha">
+    <item name="SolveCaptcha">
+This will spawn and execute a SolveCaptcha Block.
+
+Syntax:
+SOLVECAPTCHA TextCaptcha "question?" LANGUAGEGROUP LANGUAGE [UseProxy?] ["UserAgent"]
+SOLVECAPTCHA ImageCaptcha "base64" LANGUAGEGROUP LANGUAGE MINLEN MAXLEN CHARSET "instructions" [IsPhrase?] [CaseSensitive?] [RequiresCalculation?] [UseProxy?] ["UserAgent"]
+SOLVECAPTCHA ReCaptchaV2 "sitekey" "siteurl" [IsInvisible?] [UseProxy?] ["UserAgent"]
+SOLVECAPTCHA ReCaptchaV3 "sitekey" "siteurl" "action" "minscore" [UseProxy?] ["UserAgent"]
+SOLVECAPTCHA FunCaptcha "pkey" "serviceurl" [NoJS?] [UseProxy?] ["UserAgent"]
+SOLVECAPTCHA KeyCaptcha "userid" "sessionid" "wss1" "wss2" [UseProxy?] ["UserAgent"]
+SOLVECAPTCHA HCaptcha "sitekey" "siteurl" [UseProxy?] ["UserAgent"]
+SOLVECAPTCHA GeeTest "gt" "challenge" "apiserver" [UseProxy?] ["UserAgent"]
+SOLVECAPTCHA Capy "sitekey" "siteurl" [UseProxy?] ["UserAgent"]
+
+When the block is processed, if the solution was sucessful it will generate 2 variables:
+- SOLUTION (containing the solution as plaintext)
+- CAPTCHAID (containing the id you can send to report bad captchas)
+
+In the case of GeeTest, the block will generate 4 variables instead:
+- CHALLENGE
+- VALIDATE
+- SECCODE
+- CAPTCHAID
+    </item>
+    <item name="ReportCaptcha">
+This will spawn and execute a ReportCaptcha Block.
+
+Syntax:
+REPORTCAPTCHA Type "id"
+    </item>
+    <item name="Recaptcha (Obsolete)">
+THIS BLOCK IS OBSOLETE! IT WILL BE REMOVED IN THE FUTURE, DO NOT USE IT!
 This will spawn and execute a Recaptcha Block.
 
 Syntax:
@@ -308,7 +342,8 @@ RECAPTCHA "URL" "SITEKEY" -> VAR "NAME"
 Example:
 RECAPTCHA "http://example.com" "ABCD" -> VAR "RECAP"
     </item>
-    <item name="Captcha">
+    <item name="Captcha (Obsolete)">
+THIS BLOCK IS OBSOLETE! IT WILL BE REMOVED IN THE FUTURE, DO NOT USE IT!
 This will spawn and execute a Captcha Block.
 
 Syntax:
@@ -321,10 +356,10 @@ CAPTCHA "http://example.com/image.png" -> VAR "CAP"
 This will spawn and execute a Parse Block.
 
 Syntax:
-PARSE "TARGET" LR "LEFT" "RIGHT" [Recursive?] [UseRegexLR?] -> VAR/CAP "NAME" ["PREFIX" "SUFFIX"]
-PARSE "TARGET" CSS "SELECTOR" "ATTRIBUTE" [INDEX / Recursive?] -> VAR/CAP "NAME" ["PREFIX" "SUFFIX"]
-PARSE "TARGET" JSON "FIELD" [Recursive?] -> VAR/CAP "NAME" ["PREFIX" "SUFFIX"]
-PARSE "TARGET" REGEX "REGEX" "OUTPUT" [Recursive?] -> VAR/CAP "NAME" ["PREFIX" "SUFFIX"]
+PARSE "TARGET" LR "LEFT" "RIGHT" [Recursive?] [EncodeOutput?] [CreateEmpty?] [UseRegexLR?] -> VAR/CAP "NAME" ["PREFIX" "SUFFIX"]
+PARSE "TARGET" CSS "SELECTOR" "ATTRIBUTE" [INDEX / Recursive?] [EncodeOutput?] [CreateEmpty?] -> VAR/CAP "NAME" ["PREFIX" "SUFFIX"]
+PARSE "TARGET" JSON "FIELD" [JTokenParsing?] [Recursive?] [EncodeOutput?] [CreateEmpty?] -> VAR/CAP "NAME" ["PREFIX" "SUFFIX"]
+PARSE "TARGET" REGEX "REGEX" "OUTPUT" [Recursive?] [EncodeOutput?] [CreateEmpty?] [DotMatches?] [CaseSensitive?] -> VAR/CAP "NAME" ["PREFIX" "SUFFIX"]
 
 Examples:
 PARSE "&lt;SOURCE&gt;" LR "&lt;span&gt;" "&lt;/span&gt;" Recursive=True -> CAP "BALANCE" "$" ""
@@ -334,7 +369,7 @@ PARSE "&lt;SOURCE&gt;" CSS "[name=csrf]" "value" -> VAR "CSRF"
 This will spawn and execute a BypassCF Block.
 
 Syntax:
-BYPASSCF "URL" ["UA"]
+BYPASSCF "URL" [SECPROTO security-protocol] ["UA"]
 
 Example:
 BYPASSCF "http://example.com"
@@ -368,7 +403,7 @@ Syntax:
 TCP COMMAND [ARGUMENTS]
 
 Allowed Commands:
-CONNECT "HOST" "PORT" [UseSSL?] [-> VAR/CAP "NAME"]
+CONNECT "HOST" "PORT" [UseSSL?] [WaitForHello?] [-> VAR/CAP "NAME"]
 SEND "MESSAGE" [WebSocket?] [-> VAR/CAP "NAME"]
 DISCONNECT
 
@@ -412,10 +447,10 @@ ELEMENTACTION CLASS "testclass" Recursive=True GETTEXT -> CAP "ITEMS"
 This will spawn and execute an ExecuteJS block
 
 Syntax:
-EXECUTEJS "SCRIPT"
+EXECUTEJS "SCRIPT" [-> VAR/CAP "NAME"]
 
 Examples:
-EXECUTEJS "alert('hi');"
+EXECUTEJS "alert('hi'); return 'hello';" -> VAR "GREETING"
     </item>
   </section>
   <section name="Flow Control">

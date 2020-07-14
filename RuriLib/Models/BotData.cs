@@ -1,5 +1,6 @@
 ﻿using Extreme.Net;
 using OpenQA.Selenium.Remote;
+using RuriLib.Enums;
 using RuriLib.Models;
 using RuriLib.ViewModels;
 using System;
@@ -42,8 +43,8 @@ namespace RuriLib
     /// </summary>
     public class BotData
     {
-        /// <summary>A random number generator that methods can refer to, in order to avoid the generation of the same random number if executed in rapid succession.</summary>
-        public Random rand = new Random();
+        /// <summary>A random number generator.</summary>
+        public Random random;
 
         /// <summary>The Status of the Bot.</summary>
         public BotStatus Status { get; set; }
@@ -57,26 +58,14 @@ namespace RuriLib
         /// <summary>The id of the current Bot.</summary>
         public int BotNumber { get; set; }
 
-        /// <summary>The captcha service currently being used.</summary>
-        public CaptchaServices.CaptchaService CaptchaService { get; set; }
-
         /// <summary>The selenium webdriver currently being used.</summary>
         public RemoteWebDriver Driver { get; set; }
 
         /// <summary>Whether the browser is open or not.</summary>
         public bool BrowserOpen { get; set; }
-        
-        /// <summary>The TCP Client used for TCP blocks.</summary>
-        public TcpClient TCPClient { get; set; }
 
-        /// <summary>The NET Stream used for TCP blocks with unencrypted connection.</summary>
-        public NetworkStream NETStream { get; set; }
-
-        /// <summary>The SSL Stream used for TCP blocks with encrypted connection.</summary>
-        public SslStream SSLStream { get; set; }
-
-        /// <summary>Whether to use SSL for the current TCPClient.</summary>
-        public bool TCPSSL { get; set; } = true;
+        /// <summary>A dictionary of object that can be used for keeping session-based objects through different blocks.</summary>
+        public Dictionary<string, object> CustomObjects { get; set; }
 
         /// <summary>The wrapped data line that needs to be checked.</summary>
         public CData Data { get; set; }
@@ -94,7 +83,7 @@ namespace RuriLib
         public ConfigSettings ConfigSettings { get; set; }
 
         /// <summary>The remaining balance on the captcha service account.</summary>
-        public double Balance { get; set; }
+        public decimal Balance { get; set; }
 
         /// <summary>The paths of the Screenshots saved by selenium.</summary>
         public List<string> Screenshots { get; set; }
@@ -160,13 +149,15 @@ namespace RuriLib
         /// <param name="data">The wrapped data line to check</param>
         /// <param name="proxy">The proxy to use (set to null if none)</param>
         /// <param name="useProxies">Whether to use the proxy for requests</param>
+        /// <param name="random">A reference to the global random generator</param>
         /// <param name="botNumber">The number of the bot that is creating this object</param>
         /// <param name="isDebug">Whether this object is created from a Debugger or from a Runner</param>
-        public BotData(RLSettingsViewModel globalSettings, ConfigSettings configSettings, CData data, CProxy proxy, bool useProxies, int botNumber = 0, bool isDebug = true)
+        public BotData(RLSettingsViewModel globalSettings, ConfigSettings configSettings, CData data, CProxy proxy, bool useProxies, Random random, int botNumber = 0, bool isDebug = true)
         {
             Data = data;
             Proxy = proxy;
             UseProxies = useProxies;
+            this.random = new Random(random.Next(0, int.MaxValue)); // Create a new local RNG seeded with a random seed from the global RNG
             Status = BotStatus.NONE;
             BotNumber = BotNumber;
             GlobalSettings = globalSettings;
@@ -181,7 +172,7 @@ namespace RuriLib
             ResponseSource = "";
             Cookies = new Dictionary<string, string>();
             ResponseHeaders = new Dictionary<string, string>();
-            try { foreach (var v in Data.GetVariables()) Variables.Set(v); } catch { }
+            try { foreach (var v in Data.GetVariables(ConfigSettings.EncodeData)) Variables.Set(v); } catch { }
             
             GlobalVariables = new VariableList();
             GlobalCookies = new CookieDictionary();            
@@ -190,6 +181,8 @@ namespace RuriLib
             BrowserOpen = false;
             IsDebug = isDebug;
             BotNumber = botNumber;
+
+            CustomObjects = new Dictionary<string, object>();
         }
 
         /// <summary>
@@ -200,6 +193,15 @@ namespace RuriLib
         {
             if (GlobalSettings.General.EnableBotLog || IsDebug)
                 LogBuffer.Add(entry);
+        }
+
+        /// <summary>
+        /// Adds a new message to the LogBuffer with white text.
+        /// </summary>
+        /// <param name="message">The message to log</param>
+        public void Log(string message)
+        {
+            Log(new LogEntry(message, Colors.White));
         }
 
         /// <summary>
@@ -218,6 +220,16 @@ namespace RuriLib
         public void LogNewLine()
         {
             LogBuffer.Add(new LogEntry("", Colors.White));
+        }
+
+        /// <summary>
+        /// Retrieves a custom object from the 
+        /// </summary>
+        /// <param name="key">The key of the object in the dictionary</param>
+        /// <returns>The object or null if the key was not found</returns>
+        public object GetCustomObject(string key)
+        {
+            return CustomObjects.ContainsKey(key) ? CustomObjects[key] : null;
         }
     }
 }

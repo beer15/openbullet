@@ -42,40 +42,46 @@ namespace RuriLib.Models
     /// <summary>
     /// A proxy that supports http(s) and socks4/4a/5 protocols, authorization and chaining.
     /// </summary>
-    public class CProxy
+    public class CProxy : Persistable<Guid>
     {
-        /// <summary>Needed for NoSQL storage.</summary>
-        public Guid Id { get; set; }
-
+        private string proxy = "";
         /// <summary>The unparsed proxy string.</summary>
-        public string Proxy { get; set; } = "";
+        public string Proxy { get => proxy; set { proxy = value; OnPropertyChanged(); } }
 
+        private string username = "";
         /// <summary>The username used for authentication (empty if none).</summary>
-        public string Username { get; set; } = "";
+        public string Username { get => username; set { username = value; OnPropertyChanged(); } }
 
+        private string password = "";
         /// <summary>The password used for authentication (empty if none).</summary>
-        public string Password { get; set; } = "";
+        public string Password { get => password; set { password = value; OnPropertyChanged(); } }
 
+        private ProxyType type = ProxyType.Http;
         /// <summary>The type of proxy.</summary>
-        public ProxyType Type { get; set; } = ProxyType.Http;
+        public ProxyType Type { get => type; set { type = value; OnPropertyChanged(); } }
 
+        private string country = "";
         /// <summary>The country of the proxy's ip.</summary>
-        public string Country { get; set; } = "";
+        public string Country { get => country; set { country = value; OnPropertyChanged(); } }
 
+        private int ping = 0;
         /// <summary>The response delay of the proxy.</summary>
-        public int Ping { get; set; } = 0;
+        public int Ping { get => ping; set { ping = value; OnPropertyChanged(); } }
 
         /// <summary>The next proxy object in a Proxy Chain.</summary>
         public CProxy Next { get; set; } = null;
 
+        private DateTime lastUsed = new DateTime(1970, 1, 1);
         /// <summary>When the proxy was last used.</summary>
-        public DateTime LastUsed { get; set; } = new DateTime(1970, 1, 1);
+        public DateTime LastUsed { get => lastUsed; set { lastUsed = value; OnPropertyChanged(); } }
 
+        private DateTime lastChecked = new DateTime(1970, 1, 1);
         /// <summary>When the proxy was last checked.</summary>
-        public DateTime LastChecked { get; set; } = new DateTime(1970, 1, 1);
+        public DateTime LastChecked { get => lastChecked; set { lastChecked = value; OnPropertyChanged(); } }
 
+        private ProxyWorking working = ProxyWorking.UNTESTED;
         /// <summary>The Working Status of the proxy.</summary>
-        public ProxyWorking Working { get; set; } = ProxyWorking.UNTESTED;
+        public ProxyWorking Working { get => working; set { working = value; OnPropertyChanged(); } }
 
         /// <summary>Whether the proxy has a successor in the Proxy Chain.</summary>
         [BsonIgnore]
@@ -120,8 +126,10 @@ namespace RuriLib.Models
         /// </summary>
         /// <param name="proxy">The string to parse the proxy from</param>
         /// <param name="defaultType">The default type to use when not specified</param>
+        /// <param name="defaultUsername">The default username to use when not specified</param>
+        /// <param name="defaultPassword">The default password to use when not specified</param>
         /// <returns>The parsed CProxy object</returns>
-        public CProxy Parse(string proxy, ProxyType defaultType = ProxyType.Http)
+        public CProxy Parse(string proxy, ProxyType defaultType = ProxyType.Http, string defaultUsername = "", string defaultPassword = "")
         {
             // Take the first proxy of the chain
             var chain = proxy.Split(new string[] { "->" }, 2, StringSplitOptions.None);
@@ -150,11 +158,16 @@ namespace RuriLib.Models
                 Username = fields[2];
                 Password = fields[3];
             }
+            else
+            {
+                Username = defaultUsername;
+                Password = defaultPassword;
+            }
 
             // If the chain is not finished, set the next proxy by parsing recursively
             if (chain.Count() > 1)
             {
-                Next = (new CProxy()).Parse(chain[1], defaultType);
+                Next = (new CProxy()).Parse(chain[1], defaultType, defaultUsername, defaultPassword);
             }
 
             // Finally return this proxy
@@ -169,52 +182,63 @@ namespace RuriLib.Models
         {
             if (HasNext)
             {
-                ChainProxyClient cpc = new ChainProxyClient();
-                var current = this;
-                while (current != null)
-                {
-                    switch (current.Type)
-                    {
-                        case ProxyType.Http:
-                            cpc.AddHttpProxy(current.Proxy);
-                            break;
-
-                        case ProxyType.Socks4:
-                            cpc.AddSocks4Proxy(current.Proxy);
-                            break;
-
-                        case ProxyType.Socks4a:
-                            cpc.AddSocks4aProxy(current.Proxy);
-                            break;
-
-                        case ProxyType.Socks5:
-                            cpc.AddSocks5Proxy(current.Proxy);
-                            break;
-                    }
-                    current = current.Next;
-                }
-                return cpc;
+                return GetChainClient();
             }
             else
             {
-                switch (Type)
-                {
-                    case ProxyType.Http:
-                        return HttpProxyClient.Parse(Proxy);
-
-                    case ProxyType.Socks4:
-                        return Socks4ProxyClient.Parse(Proxy);
-
-                    case ProxyType.Socks4a:
-                        return Socks4aProxyClient.Parse(Proxy);
-
-                    case ProxyType.Socks5:
-                        return Socks5ProxyClient.Parse(Proxy);
-
-                    default:
-                        return null;
-                }
+                return GetStandardClient();
             }
+        }
+
+        /// <summary>
+        /// Gets the standard ProxyClient related to the specific proxy type.
+        /// </summary>
+        /// <returns>The standard ProxyClient (not chained)</returns>
+        private ProxyClient GetStandardClient()
+        {
+            ProxyClient pc;
+
+            switch (Type)
+            {
+                case ProxyType.Http:
+                    pc = HttpProxyClient.Parse(Proxy);
+                    break;
+
+                case ProxyType.Socks4:
+                    pc = Socks4ProxyClient.Parse(Proxy);
+                    break;
+
+                case ProxyType.Socks4a:
+                    pc = Socks4aProxyClient.Parse(Proxy);
+                    break;
+
+                case ProxyType.Socks5:
+                    pc = Socks5ProxyClient.Parse(Proxy);
+                    break;
+
+                default:
+                    return null;
+            }
+
+            pc.Username = Username;
+            pc.Password = Password;
+
+            return pc;
+        }
+
+        private ChainProxyClient GetChainClient()
+        {
+            ChainProxyClient cpc = new ChainProxyClient();
+
+            var current = this;
+
+            while (current != null)
+            {
+                cpc.AddProxy(current.GetStandardClient());
+                current = current.Next;
+            }
+
+            return cpc;
         }
 
         /// <summary>The Host string parsed from the proxy.</summary>
@@ -241,12 +265,14 @@ namespace RuriLib.Models
 
         /// <summary>Whether the proxy is a valid numeric proxy.</summary>
         [BsonIgnore]
-        public bool IsValidNumeric {
-            get {
+        public bool IsValidNumeric
+        {
+            get
+            {
                 return !(
-                    Host == "" || 
-                    Port == "" || 
-                    Port.Any(c => !char.IsDigit(c)) || 
+                    Host == string.Empty ||
+                    Port == string.Empty ||
+                    Port.Any(c => !char.IsDigit(c)) ||
                     Host.Split('.').Count() != 4 ||
                     !IsNumeric
                     );

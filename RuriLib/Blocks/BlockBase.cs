@@ -86,30 +86,54 @@ namespace RuriLib
         {
             var toReplace = new List<string>();
 
-            // Regex parse the syntax <LIST[*]> (only the first one! This doesn't support multiple arrays because they can have different sizes)
-            var match = Regex.Match(input, @"<([^\[]*)\[\*\]>");
+            // Regex parse the syntax <LIST[*]>
+            var matches = Regex.Matches(input, @"<([^\[]*)\[\*\]>");
+            var variables = new List<CVar>();
 
-            if (match.Success)
+            foreach (Match m in matches)
             {
-                var full = match.Groups[0].Value;
-                var name = match.Groups[1].Value;
+                var name = m.Groups[1].Value;
 
                 // Retrieve the dict
-                var list = data.Variables.GetList(name);
-                if (list == null) list = data.GlobalVariables.GetList(name);
-
-                // If there's no corresponding variable, just readd the input string and proceed with normal replacement
-                if (list == null) toReplace.Add(input);
-                else
+                var variable = data.Variables.Get(name);
+                if (variable == null)
                 {
-                    foreach (var item in list)
-                        toReplace.Add(input.Replace(full, item));
+                    variable = data.GlobalVariables.Get(name);
+                    if (variable == null) continue;
+                }
+
+                if (variable.Type == CVar.VarType.List)
+                {
+                    variables.Add(variable);
+                }
+            }
+
+            // If there's no corresponding variable, just readd the input string and proceed with normal replacement
+            if (variables.Count > 0)
+            {
+                var max = variables.OrderBy(v => v.Value.Count).Last().Value.Count;
+                for (var i = 0; i < max; i++)
+                {
+                    var replaced = input;
+                    foreach(var variable in variables)
+                    {
+                        var list = (List<string>)variable.Value;
+                        if (list.Count > i)
+                        {
+                            replaced = replaced.Replace($"<{variable.Name}[*]>", list[i]);
+                        }
+                        else
+                        {
+                            replaced = replaced.Replace($"<{variable.Name}[*]>", "NULL");
+                        }
+                    }
+                    toReplace.Add(replaced);
                 }
                 goto END;
             }
 
             // Regex parse the syntax <DICT(*)> (wildcard key -> returns list of all values)
-            match = Regex.Match(input, @"<([^\(]*)\(\*\)>");
+            var match = Regex.Match(input, @"<([^\(]*)\(\*\)>");
 
             if (match.Success)            
             {
@@ -181,6 +205,7 @@ namespace RuriLib
                 output = output.Replace("<INPUT>", data.Data.Data);
                 output = output.Replace("<STATUS>", data.Status.ToString());
                 output = output.Replace("<BOTNUM>", data.BotNumber.ToString());
+                output = output.Replace("<RETRIES>", data.Data.Retries.ToString());
                 if (data.Proxy != null)
                     output = output.Replace("<PROXY>", data.Proxy.Proxy);
 
@@ -276,7 +301,42 @@ namespace RuriLib
             data.Address = data.Driver.Url;
             data.ResponseSource = data.Driver.PageSource;
         }
-        
+
+        #region Variable Insertion
+        /// <summary>
+        /// Adds a single variable with the given value.
+        /// </summary>
+        /// <param name="data">The BotData used for variable replacement and insertion</param>
+        /// <param name="isCapture">Whether the variable should be marked for Capture</param>
+        /// <param name="value">The value of the variable</param>
+        /// <param name="variableName">The name of the variable to create</param>
+        /// <param name="prefix">The string to add at the start of the value</param>
+        /// <param name="suffix">The string to add at the end of the value</param>
+        /// <param name="urlEncode">Whether to URLencode the values before creating the variables</param>
+        /// <param name="createEmpty">Whether to create an empty (single) variable if the list of values is empty</param>
+        public static void InsertVariable(BotData data, bool isCapture, string value, string variableName,
+            string prefix = "", string suffix = "", bool urlEncode = false, bool createEmpty = true)
+        {
+            InsertVariable(data, isCapture, false, new string[] { value }, variableName, prefix, suffix, urlEncode, createEmpty);
+        }
+
+        /// <summary>
+        /// Adds a list variable with the given value.
+        /// </summary>
+        /// <param name="data">The BotData used for variable replacement and insertion</param>
+        /// <param name="isCapture">Whether the variable should be marked for Capture</param>
+        /// <param name="values">The list of values</param>
+        /// <param name="variableName">The name of the variable to create</param>
+        /// <param name="prefix">The string to add at the start of the value</param>
+        /// <param name="suffix">The string to add at the end of the value</param>
+        /// <param name="urlEncode">Whether to URLencode the values before creating the variables</param>
+        /// <param name="createEmpty">Whether to create an empty (single) variable if the list of values is empty</param>
+        public static void InsertVariable(BotData data, bool isCapture, IEnumerable<string> values, string variableName,
+            string prefix = "", string suffix = "", bool urlEncode = false, bool createEmpty = true)
+        {
+            InsertVariable(data, isCapture, true, values, variableName, prefix, suffix, urlEncode, createEmpty);
+        }
+
         /// <summary>
         /// Adds a single or list variable with the given value.
         /// </summary>
@@ -287,88 +347,64 @@ namespace RuriLib
         /// <param name="variableName">The name of the variable to create</param>
         /// <param name="prefix">The string to add at the start of the value</param>
         /// <param name="suffix">The string to add at the end of the value</param>
-        public static void InsertVariables(BotData data, bool isCapture, bool recursive, List<string> values, string variableName, string prefix, string suffix)
+        /// <param name="urlEncode">Whether to URLencode the values before creating the variables</param>
+        /// <param name="createEmpty">Whether to create an empty (single) variable if the list of values is empty</param>
+        internal static void InsertVariable(BotData data, bool isCapture, bool recursive, IEnumerable<string> values, string variableName, 
+            string prefix = "", string suffix = "", bool urlEncode = false, bool createEmpty = true)
         {
-            var list = values
-                .Where(v => !string.IsNullOrEmpty(v)) // Remove the empty entries, e.g. the one added by default by the Parse Block
-                .Select(v => ReplaceValues(prefix, data) + v.Trim() + ReplaceValues(suffix, data));
-            CVar variable;
-            if (recursive) variable = new CVar(variableName, list.ToList(), isCapture);
-            else variable = new CVar(variableName, list.First(), isCapture);
-            data.Variables.Set(variable);
-            data.Log(new LogEntry("Parsed variable" + " | Name: " + variable.Name + " | Value: " + variable.ToString() + Environment.NewLine, isCapture ? Colors.OrangeRed : Colors.Gold));
+            var list = values.Select(v => ReplaceValues(prefix, data) + v.Trim() + ReplaceValues(suffix, data)).ToList();
+            if (urlEncode) list = list.Select(v => Uri.EscapeDataString(v)).ToList();
+
+            CVar variable = null;
+            if (recursive)
+            {
+                if (list.Count == 0)
+                {
+                    if (createEmpty)
+                    {
+                        variable = new CVar(variableName, list, isCapture);
+                    }
+                }
+                else
+                {
+                    variable = new CVar(variableName, list, isCapture);
+                }
+            }
+            else
+            {
+                if (list.Count == 0)
+                {
+                    if (createEmpty)
+                    {
+                        variable = new CVar(variableName, "", isCapture);
+                    }
+                }
+                else
+                {
+                    variable = new CVar(variableName, list.First(), isCapture);
+                }
+            }
+
+            // If we don't want to save empty captures, and it's a capture, and the list is either an empty string or a list made of an empty string
+            if (!data.ConfigSettings.SaveEmptyCaptures && isCapture && 
+                (list.Count == 0 || list.Count > 0 && string.IsNullOrWhiteSpace(list.First())))
+            {
+                variable = null;
+            }
+
+            if (variable != null)
+            {
+                data.Variables.Set(variable);
+                data.Log(new LogEntry("Parsed variable" + " | Name: " + variable.Name + " | Value: " + variable.ToString() + Environment.NewLine, isCapture ? Colors.OrangeRed : Colors.Gold));
+            }
+            else
+            {
+                data.Log(new LogEntry("Could not parse any data. The variable was not created.", Colors.White));
+            }
         }
+        #endregion
 
         #region File Utilities
-        /// <summary>
-        /// Saves a Selenium screenshot to a file with automatically generated name.
-        /// </summary>
-        /// <param name="screenshot">The Selenium screenshot</param>
-        /// <param name="data">The BotData used for path creation</param>
-        public static void SaveScreenshot(OpenQA.Selenium.Screenshot screenshot, BotData data)
-        {
-            var path = MakeScreenshotPath(data);
-            data.Screenshots.Add(path);
-            screenshot.SaveAsFile(path);
-        }
-
-        /// <summary>
-        /// Saves a screenshot to a file with automatically generated name.
-        /// </summary>
-        /// <param name="screenshot">The bitmap image</param>
-        /// <param name="data">The BotData used for path creation</param>
-        public static void SaveScreenshot(Bitmap screenshot, BotData data)
-        {
-            var path = MakeScreenshotPath(data);
-            data.Screenshots.Add(path);
-            screenshot.Save(path);
-        }
-
-        /// <summary>
-        /// Builds the path for the screenshot file.
-        /// </summary>
-        /// <param name="data">The BotData for path creation</param>
-        /// <returns>The path of the file to save the screenshot to</returns>
-        private static string MakeScreenshotPath(BotData data)
-        {
-            var folderName = MakeValidFileName(data.ConfigSettings.Name);
-            var originalFilename = MakeValidFileName(data.Data.Data);
-            // Check if you have to make the folder
-            if (!Directory.Exists($"Screenshots\\{folderName}")) Directory.CreateDirectory($"Screenshots\\{folderName}");
-
-            // Save the file inside the folder
-            var filename = GetFirstAvailableFileName($"Screenshots\\{folderName}\\", originalFilename, "bmp");
-            return $"Screenshots\\{folderName}\\{filename}";
-        }
-
-        /// <summary>
-        /// Gets the first available name in the given folder by incrementing a number at the end of the filename.
-        /// </summary>
-        /// <param name="basePath">The path to the folder</param>
-        /// <param name="fileName">The name of the file without numbers at the end</param>
-        /// <param name="extension">The extension of the file</param>
-        /// <returns>The first available filename (including extension)</returns>
-        public static string GetFirstAvailableFileName(string basePath, string fileName, string extension)
-        {
-            int i;
-            for (i = 1; File.Exists(basePath + fileName + i + "." + extension); i++) { }
-            return fileName + i + "." + extension;
-        }
-
-        /// <summary>
-        /// Fixes the filename to be compatible with the filesystem indicization.
-        /// </summary>
-        /// <param name="name">The name of the file</param>
-        /// <param name="underscore">Whether to replace the unallowed characters with an underscore instead of removing them</param>
-        /// <returns>The valid filename ready to be saved to disk</returns>
-        public static string MakeValidFileName(string name, bool underscore = true)
-        {
-            string invalidChars = Regex.Escape(new string(Path.GetInvalidFileNameChars()));
-            string invalidRegStr = string.Format(@"([{0}]*\.+$)|([{0}]+)", invalidChars);
-
-            return Regex.Replace(name, invalidRegStr, underscore ? "_" : "");
-        }
-
         /// <summary>
         /// Truncates a string to fit a given size and adds ' [...]' (5 characters) at the end to display that the string would be longer.
         /// </summary>

@@ -16,6 +16,9 @@ namespace RuriLib.Models
         /// <summary>The WordlistType of the Wordlist the line belongs to.</summary>
         public WordlistType Type { get; set; }
 
+        /// <summary>The amount of times the data has been retried with a different proxy.</summary>
+        public int Retries { get; set; } = 0;
+
         /// <summary>Whether the data line respects the regex verification.</summary>
         public bool IsValid
         {
@@ -40,13 +43,14 @@ namespace RuriLib.Models
         /// <summary>
         /// Gets all the variables that need to be set after slicing the data line.
         /// </summary>
+        /// <param name="encode">Whether the returned variable values should be URLencoded</param>
         /// <returns>The variables that need to be set inside the Bot's VariableList</returns>
-        public List<CVar> GetVariables()
+        public List<CVar> GetVariables(bool encode)
         {
             return Data
                 .Split(new string[] { Type.Separator }, StringSplitOptions.None)
                 .Zip(Type.Slices, (k, v) => new { k, v })
-                .Select(x => new CVar(x.v, x.k, false, true))
+                .Select(x => new CVar(x.v, encode ? Uri.EscapeDataString(x.k) : x.k, false, true))
                 .ToList();
         }
 
@@ -58,7 +62,7 @@ namespace RuriLib.Models
         public bool RespectsRules(List<DataRule> rules)
         {
             var valid = true;
-            var variables = GetVariables();
+            var variables = GetVariables(false);
             foreach(var rule in rules)
             {
                 try
@@ -81,6 +85,10 @@ namespace RuriLib.Models
 
                         case RuleType.MustNotContain:
                             valid = !CheckContains(slice, rule.RuleString);
+                            break;
+
+                        case RuleType.MustMatchRegex:
+                            valid = Regex.Match(slice, rule.RuleString).Success;
                             break;
                     }
 
@@ -112,7 +120,7 @@ namespace RuriLib.Models
                     return input.Any(c => char.IsDigit(c));
 
                 case "Symbol":
-                    return input.Any(c => char.IsSymbol(c));
+                    return input.Any(c => char.IsSymbol(c) || char.IsPunctuation(c));
 
                 default:
                     foreach(var c in what.ToCharArray())
